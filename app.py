@@ -42,6 +42,7 @@ h1, h2, h3, p, label { color: white !important; }
   border-radius: 12px !important;
   width: 100% !important;
 }
+.stFileUploader, .stFileUploader > div { width: 100% !important; }
 .card {
   background: rgba(255,255,255,0.10);
   border-radius: 16px;
@@ -186,7 +187,6 @@ def make_srt(audio_path, srt_path, fallback_text, max_words):
     return False
 
 def get_safe_font_size(font_size, max_words):
-    # If line is long, auto reduce font size - Never cut
     if max_words <= 2:
         return font_size
     if max_words == 3:
@@ -299,9 +299,6 @@ def make_clip(
             outl = outline_size
             shad = 1
 
-        # CAPTION POSITION - Safe Area for All Devices
-        # Bottom = 300 = Above Shorts Like/Comment buttons
-        # Middle = Center, Top = 140 = Below notch
         if "Middle" in subtitle_position:
             align = 5
             marg = 0
@@ -323,7 +320,6 @@ def make_clip(
         style += ",Shadow=" + str(shad)
         style += ",Alignment=" + str(align)
         style += ",MarginV=" + str(marg)
-        # MarginL/R 60 -> 130 : 130px gap left/right, never cut
         style += ",MarginL=130,MarginR=130,Bold=1,WrapStyle=2"
         vf = base_vf + ",subtitles='" + srt_esc + "'"
         vf += ":force_style='" + style + "'"
@@ -398,14 +394,13 @@ st.markdown(
 )
 uploaded = st.file_uploader(
     "Choose a video file",
-    type=["mp4", "mov", "mkv", "webm"],
-    use_container_width=True
+    type=["mp4", "mov", "mkv", "webm"]
 )
 drive_link = st.text_input(
     "Paste Google Drive Link",
     placeholder="https://drive.google.com/file/d/..."
 )
-if drive_link and st.button("Download from Drive", use_container_width=True):
+if drive_link and st.button("Download from Drive"):
     with st.spinner("Downloading..."):
         tmp = tempfile.mktemp(suffix=".mp4")
         if download_drive(drive_link, tmp):
@@ -448,7 +443,6 @@ aspect = st.selectbox(
 num_clips = st.slider("Number of Clips", 1, 3, 1)
 captions = st.toggle("Auto Captions", value=True)
 
-# STEP 3 - CAPTION POSITION + STYLE - LIKE OPUS CLIP
 st.markdown(
     '<div class="card"><h3>3. Captions - Position and Style</h3></div>',
     unsafe_allow_html=True
@@ -475,7 +469,6 @@ with c2:
         ["Yellow", "White", "Cyan", "Pink", "Green", "Orange"]
     )
 
-# NEW: Words Per Line - Main Cut Fix
 c3, c4 = st.columns(2)
 with c3:
     words_opt = st.selectbox(
@@ -515,7 +508,6 @@ with c5:
 with c6:
     outline_size = st.slider("Outline Thickness", 1, 5, 2)
 
-# NEW: Caption Position - Safe Area
 subtitle_position = st.selectbox(
     "Caption Position - Safe Area",
     [
@@ -574,7 +566,7 @@ effect = st.selectbox(
 )
 
 if video_path and os.path.exists(video_path):
-    if st.button("Generate Viral Clips", use_container_width=True):
+    if st.button("Generate Viral Clips"):
         duration = get_duration(video_path)
         if duration == 0:
             st.error("Could not read video. Re-upload.")
@@ -644,8 +636,7 @@ if st.session_state["clips"]:
         "Download " + c["name"],
         c["data"],
         file_name="clipshort_clip.mp4",
-        mime="video/mp4",
-        use_container_width=True
+        mime="video/mp4"
     )
 
     if st.session_state["viral_done"]:
