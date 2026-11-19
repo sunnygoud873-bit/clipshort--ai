@@ -12,55 +12,149 @@ st.set_page_config(
     layout="wide"
 )
 
-st.markdown("""
+# ================= UI COLOUR MANAGEMENT =================
+THEMES = {
+    "Dark Purple - Default": {
+        "bg": "#0f0c29",
+        "card": "rgba(255,255,255,0.10)",
+        "text": "#FFFFFF",
+        "subtext": "#B0B0B0",
+        "primary": "#DD2476",
+        "primary2": "#FF512F",
+        "success": "#00C853",
+        "input_bg": "#FFFFFF",
+        "input_text": "#000000",
+    },
+    "Neon Black - Gaming": {
+        "bg": "#000000",
+        "card": "rgba(0,255,136,0.08)",
+        "text": "#FFFFFF",
+        "subtext": "#00FF88",
+        "primary": "#00FF88",
+        "primary2": "#00D4FF",
+        "success": "#00FF88",
+        "input_bg": "#1A1A1A",
+        "input_text": "#FFFFFF",
+    },
+    "Clean White - Light": {
+        "bg": "#F5F5F5",
+        "card": "#FFFFFF",
+        "text": "#000000",
+        "subtext": "#666666",
+        "primary": "#6C5CE7",
+        "primary2": "#A29BFE",
+        "success": "#00B894",
+        "input_bg": "#FFFFFF",
+        "input_text": "#000000",
+    },
+}
+
+CAPTION_COLOURS = {
+    "Yellow": "&H00FFFF&",
+    "White": "&HFFFFFF&",
+    "Cyan": "&HFFFF00&",
+    "Pink": "&HFF00FF&",
+    "Green": "&H00FF00&",
+    "Orange": "&H0080FF&",
+    "Red": "&H0000FF&",
+    "Neon Green": "&H00FF88&",
+}
+
+PREVIEW_COLOURS = {
+    "Yellow": "#FFE600",
+    "White": "#FFFFFF",
+    "Cyan": "#00E5FF",
+    "Pink": "#FF00AA",
+    "Green": "#00FF00",
+    "Orange": "#FF8000",
+    "Red": "#FF0000",
+    "Neon Green": "#00FF88",
+}
+
+if "ui_theme" not in st.session_state:
+    st.session_state["ui_theme"] = "Dark Purple - Default"
+
+theme_name = st.sidebar.selectbox(
+    "UI Theme - Colour Management",
+    list(THEMES.keys()),
+    index=list(THEMES.keys()).index(st.session_state["ui_theme"])
+)
+st.session_state["ui_theme"] = theme_name
+T = THEMES[theme_name]
+
+st.markdown(f"""
 <style>
-* { box-sizing: border-box !important; }
-.stApp { background: #0f0c29 !important; }
-.main .block-container {
+* {{ box-sizing: border-box !important; }}
+.stApp {{ background: {T['bg']} !important; }}
+.main .block-container {{
   max-width: 720px !important;
   padding: 12px 12px 80px 12px !important;
   margin: auto !important;
-}
-h1, h2, h3, p, label { color: white !important; }
-.stTextInput input, .stTextArea textarea {
-  background: white !important;
-  color: black !important;
+}}
+h1, h2, h3, p, label, span {{ color: {T['text']} !important; }}
+.stCaption, small {{ color: {T['subtext']} !important; }}
+.stTextInput input, .stTextArea textarea {{
+  background: {T['input_bg']} !important;
+  color: {T['input_text']} !important;
   border-radius: 12px !important;
   font-weight: 600 !important;
   width: 100% !important;
-}
-.stButton button {
-  background: #DD2476 !important;
+  border: 2px solid {T['primary']} !important;
+}}
+.stSelectbox > div > div {{
+  background: {T['input_bg']} !important;
+  color: {T['input_text']} !important;
+  border-radius: 12px !important;
+}}
+.stButton button {{
+  background: linear-gradient(90deg, {T['primary']}, {T['primary2']}) !important;
   color: white !important;
   border-radius: 50px !important;
   font-weight: 700 !important;
   width: 100% !important;
   height: 52px !important;
-}
-.stDownloadButton button {
-  background: #00C853 !important;
+  border: none !important;
+}}
+.stDownloadButton button {{
+  background: {T['success']} !important;
+  color: white !important;
   border-radius: 12px !important;
   width: 100% !important;
-}
-.stFileUploader, .stFileUploader > div { width: 100% !important; }
-.card {
-  background: rgba(255,255,255,0.10);
+  border: none !important;
+}}
+.stFileUploader, .stFileUploader > div {{ width: 100% !important; }}
+.card {{
+  background: {T['card']};
+  border: 1px solid {T['primary']};
   border-radius: 16px;
   padding: 14px;
   margin: 12px 0;
   width: 100% !important;
-}
-video {
+}}
+.colour-preview {{
+  width: 100%;
+  height: 48px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 20px;
+  margin: 8px 0;
+  border: 2px solid white;
+}}
+video {{
   border-radius: 16px !important;
   width: 100% !important;
   max-height: 560px !important;
   object-fit: contain !important;
-}
-@media (max-width: 600px) {
-  .main .block-container { padding: 8px 8px 80px 8px !important; }
-  h1 { font-size: 28px !important; }
-  video { max-height: 420px !important; }
-}
+  border: 2px solid {T['primary']} !important;
+}}
+@media (max-width: 600px) {{
+  .main .block-container {{ padding: 8px 8px 80px 8px !important; }}
+  h1 {{ font-size: 28px !important; }}
+  video {{ max-height: 420px !important; }}
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,6 +166,8 @@ if "selected_clip" not in st.session_state:
     st.session_state["selected_clip"] = 0
 if "viral_done" not in st.session_state:
     st.session_state["viral_done"] = False
+if "sub_debug" not in st.session_state:
+    st.session_state["sub_debug"] = ""
 
 def get_drive_id(link):
     m = re.search(r"/d/([a-zA-Z0-9_-]+)", link)
@@ -149,6 +245,13 @@ def fmt_time(t):
     ms = int((t % 1) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
+def fmt_ass_time(t):
+    h = int(t // 3600)
+    m = int((t % 3600) // 60)
+    s = int(t % 60)
+    cs = int((t % 1) * 100)
+    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
+
 def split_lines(txt, max_words):
     words = txt.upper().split()
     lines = []
@@ -156,35 +259,62 @@ def split_lines(txt, max_words):
         lines.append(" ".join(words[j:j+max_words]))
     return lines
 
-def make_srt(audio_path, srt_path, fallback_text, max_words):
+def write_ass(ass_path, segments, font_name, font_size, colour, bstyle, outline, shadow, align, marg_v):
+    # ASS header - Style ikkade fix, FFmpeg ki force_style avasaram ledu
+    header = "[Script Info]\n"
+    header += "ScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n"
+    header += "[V4+ Styles]\n"
+    header += "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+    # BackColour black with alpha 80 = &H80000000&
+    style_line = f"Style: Default,{font_name},{font_size},{colour},&HFFFFFF&,&H80000000&,&H80000000&,-1,0,0,0,100,100,0,0,{bstyle},{outline},{shadow},{align},130,130,{marg_v},1\n\n"
+    header += style_line
+    header += "[Events]\n"
+    header += "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    body = ""
+    for (s, e, txt) in segments:
+        # ASS lo new line = \\N
+        txt_esc = txt.replace(",", " ").replace(":", " ")
+        body += f"Dialogue: 0,{fmt_ass_time(s)},{fmt_ass_time(e)},Default,,0,0,0,,{txt_esc}\n"
+    f = open(ass_path, "w", encoding="utf-8")
+    f.write(header + body)
+    f.close()
+    return os.path.getsize(ass_path)
+
+def make_ass_from_audio(audio_path, ass_path, fallback_text, max_words, duration, style_params):
+    font_name, font_size, colour, bstyle, outline, shadow, align, marg_v = style_params
+    segments = []
+    whisper_ok = False
     try:
         import whisper
         model = whisper.load_model("tiny")
         result = model.transcribe(audio_path, fp16=False)
         if result.get("segments"):
-            f = open(srt_path, "w", encoding="utf-8")
-            for i, seg in enumerate(result["segments"]):
+            for seg in result["segments"]:
                 txt = seg["text"].strip()
                 if not txt:
                     continue
                 lines = split_lines(txt, max_words)
                 txt2 = "\\N".join(lines)
-                f.write(str(i + 1) + "\n")
-                f.write(fmt_time(seg["start"]) + " --> ")
-                f.write(fmt_time(seg["end"]) + "\n")
-                f.write(txt2 + "\n\n")
-            f.close()
-            if os.path.getsize(srt_path) > 20:
-                return True
-    except Exception:
-        pass
-    lines = split_lines(fallback_text, max_words)
-    wrapped = "\\N".join(lines)
-    f = open(srt_path, "w", encoding="utf-8")
-    f.write("1\n00:00:00,000 --> 00:00:30,000\n")
-    f.write(wrapped + "\n\n")
-    f.close()
-    return False
+                segments.append((seg["start"], seg["end"], txt2))
+            if len(segments) > 0:
+                whisper_ok = True
+    except Exception as e:
+        whisper_ok = False
+    if not whisper_ok or len(segments) == 0:
+        # FALLBACK - 100% Guarantee subtitles vasthayi
+        # Caption text ni 3 parts ga split chesi full duration ki pettam
+        lines = split_lines(fallback_text, max_words)
+        # Prathi 5 sec ki oka line chupistham - Video motham subtitles untayi
+        chunk = max(4, duration / max(1, len(lines)))
+        for i, ln in enumerate(lines):
+            s = i * chunk
+            e = min(duration, s + chunk)
+            if s < duration:
+                segments.append((s, e, ln))
+        if len(segments) == 0:
+            segments.append((0, duration, "\\N".join(lines)))
+    size = write_ass(ass_path, segments, font_name, font_size, colour, bstyle, outline, shadow, align, marg_v)
+    return whisper_ok, len(segments), size
 
 def get_safe_font_size(font_size, max_words):
     if max_words <= 2:
@@ -209,9 +339,9 @@ def make_clip(
 ):
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     tmpdir = tempfile.mkdtemp()
-    srt_path = os.path.join(tmpdir, "subs.srt")
-    srt_esc = srt_path.replace("\\", "/")
-    srt_esc = srt_esc.replace(":", "\\:")
+    ass_path = os.path.join(tmpdir, "subs.ass")
+    # FFmpeg ki path escape - Windows / Linux rendu work avvali
+    ass_esc = ass_path.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
 
     if "9:16" in aspect:
         base_crop = "crop=ih*9/16:ih,scale=1080:1920:force_original_aspect_ratio=disable"
@@ -238,26 +368,9 @@ def make_clip(
     base_vf = base_crop + eff
     vf = base_vf
 
+    sub_status = "OFF"
     if captions_on:
-        audio_path = os.path.join(tmpdir, "audio.wav")
-        cmd_a = [
-            ffmpeg, "-y",
-            "-ss", str(start),
-            "-t", str(duration),
-            "-i", input_path,
-            "-vn", "-ac", "1", "-ar", "16000",
-            audio_path
-        ]
-        subprocess.run(cmd_a, capture_output=True)
-        if os.path.exists(audio_path):
-            make_srt(audio_path, srt_path, caption_text, max_words)
-        else:
-            f = open(srt_path, "w", encoding="utf-8")
-            f.write("1\n00:00:00,000 --> 00:00:30,000\n")
-            lines = split_lines(caption_text, max_words)
-            f.write("\\N".join(lines) + "\n\n")
-            f.close()
-
+        # Font map
         if "Montserrat" in font:
             ff_font = "Arial Black"
         elif "Bebas" in font:
@@ -269,18 +382,7 @@ def make_clip(
         else:
             ff_font = "Arial"
 
-        if caption_color == "White":
-            col = "&HFFFFFF&"
-        elif caption_color == "Cyan":
-            col = "&HFFFF00&"
-        elif caption_color == "Pink":
-            col = "&HFF00FF&"
-        elif caption_color == "Green":
-            col = "&H00FF00&"
-        elif caption_color == "Orange":
-            col = "&H0080FF&"
-        else:
-            col = "&H00FFFF&"
+        col = CAPTION_COLOURS.get(caption_color, "&H00FFFF&")
 
         if "No Box" in font_style:
             bstyle = 1
@@ -310,19 +412,41 @@ def make_clip(
             marg = 300
 
         safe_size = get_safe_font_size(font_size, max_words)
+        style_params = (ff_font, safe_size, col, bstyle, outl, shad, align, marg)
 
-        style = "FontName=" + ff_font
-        style += ",FontSize=" + str(safe_size)
-        style += ",PrimaryColour=" + col
-        style += ",OutlineColour=&H80000000&"
-        style += ",BorderStyle=" + str(bstyle)
-        style += ",Outline=" + str(outl)
-        style += ",Shadow=" + str(shad)
-        style += ",Alignment=" + str(align)
-        style += ",MarginV=" + str(marg)
-        style += ",MarginL=130,MarginR=130,Bold=1,WrapStyle=2"
-        vf = base_vf + ",subtitles='" + srt_esc + "'"
-        vf += ":force_style='" + style + "'"
+        # Audio extract chesi Whisper ki ivvu
+        audio_path = os.path.join(tmpdir, "audio.wav")
+        cmd_a = [
+            ffmpeg, "-y",
+            "-ss", str(start),
+            "-t", str(duration),
+            "-i", input_path,
+            "-vn", "-ac", "1", "-ar", "16000",
+            audio_path
+        ]
+        subprocess.run(cmd_a, capture_output=True)
+        if os.path.exists(audio_path):
+            whisper_ok, nseg, sz = make_ass_from_audio(
+                audio_path, ass_path, caption_text, max_words, duration, style_params
+            )
+            if whisper_ok:
+                sub_status = f"Whisper OK - {nseg} lines - {sz} bytes"
+            else:
+                sub_status = f"Fallback Text - {nseg} lines - {sz} bytes - Whisper failed, kani subtitles vasthayi"
+        else:
+            # Audio lekapoina ASS create cheyi
+            lines = split_lines(caption_text, max_words)
+            segs = []
+            chunk = max(4, duration / max(1, len(lines)))
+            for i, ln in enumerate(lines):
+                segs.append((i * chunk, min(duration, (i + 1) * chunk), ln))
+            sz = write_ass(ass_path, segs, ff_font, safe_size, col, bstyle, outl, shad, align, marg)
+            sub_status = f"No Audio - Fallback - {sz} bytes"
+
+        # SUBTITLES FIX: force_style vadakunda, direct ASS file
+        # ASS lone style undi kabatti FFmpeg direct ga burn chesthadi
+        vf = base_vf + ",subtitles='" + ass_esc + "'"
+        st.session_state["sub_debug"] = sub_status
 
     music_path = None
     if music_option != "No Music":
@@ -373,11 +497,13 @@ def make_clip(
             output_path
         ]
 
-    subprocess.run(cmd, capture_output=True)
+    res = subprocess.run(cmd, capture_output=True, text=True)
     if os.path.exists(output_path):
         if os.path.getsize(output_path) > 10000:
-            return True
-    return False
+            return True, sub_status
+    # FFmpeg error unte chupinchu - Subtitle error aithe telusthadi
+    st.session_state["sub_debug"] = "FFmpeg Error: " + res.stderr[-500:]
+    return False, sub_status
 
 st.markdown(
     '<h1 style="text-align:center;">ClipShort AI</h1>',
@@ -436,19 +562,24 @@ prompt = st.text_input(
     placeholder="Moment most likely to go viral"
 )
 clip_len = st.slider("Clip Length (seconds)", 15, 60, 30)
+st.caption("Normal Clip: 30 Sec - Best for Shorts / Reels")
 aspect = st.selectbox(
     "Aspect Ratio",
     ["9:16 - Shorts / Reels", "1:1 - Post", "16:9 - YouTube"]
 )
 num_clips = st.slider("Number of Clips", 1, 3, 1)
 captions = st.toggle("Auto Captions", value=True)
+if captions:
+    st.success("Subtitles ON - Video lo kanipisthayi")
+else:
+    st.warning("Subtitles OFF - Toggle ON cheyi, lekapothe subtitles ravu!")
 
 st.markdown(
-    '<div class="card"><h3>3. Captions - Position and Style</h3></div>',
+    '<div class="card"><h3>3. Captions - Position, Style & Colour</h3></div>',
     unsafe_allow_html=True
 )
 caption_text = st.text_input("Caption Text", value="FOLLOW FOR MORE")
-st.caption("Preview like Opus: Word Cut = 2 words per line, never cuts")
+st.caption("Whisper fail ayina kuda ee text subtitles la vasthadi - Guarantee")
 
 c1, c2 = st.columns(2)
 with c1:
@@ -466,8 +597,15 @@ with c1:
 with c2:
     caption_color = st.selectbox(
         "Caption Color",
-        ["Yellow", "White", "Cyan", "Pink", "Green", "Orange"]
+        list(CAPTION_COLOURS.keys())
     )
+
+preview_hex = PREVIEW_COLOURS.get(caption_color, "#FFE600")
+st.markdown(
+    f'<div class="colour-preview" style="background:{preview_hex}; color:black;">{caption_text.upper()} - {caption_color}</div>',
+    unsafe_allow_html=True
+)
+st.caption("This is exactly how it will look in video - Same colour")
 
 c3, c4 = st.columns(2)
 with c3:
@@ -579,7 +717,7 @@ if video_path and os.path.exists(video_path):
                 tfm.write(uploaded_music.read())
                 tfm.close()
                 uploaded_music_path = tfm.name
-            with st.spinner("Generating... Please wait"):
+            with st.spinner("Generating... Please wait - Subtitles burning..."):
                 st.session_state["clips"] = []
                 st.session_state["selected_clip"] = 0
                 for i in range(num_clips):
@@ -587,7 +725,7 @@ if video_path and os.path.exists(video_path):
                     if start < 0:
                         start = 0
                     out = tempfile.mktemp(suffix="_clip.mp4")
-                    ok = make_clip(
+                    ok, sub_msg = make_clip(
                         video_path, out, start,
                         min(clip_len, duration - start),
                         aspect, captions, caption_text,
@@ -605,8 +743,10 @@ if video_path and os.path.exists(video_path):
                         st.session_state["clips"].append(
                             {"name": "Clip " + str(i + 1), "data": cb}
                         )
+                        st.info("Subtitles: " + sub_msg)
                     else:
                         st.error("Failed to create Clip " + str(i + 1))
+                        st.error(sub_msg)
                 st.session_state["viral_done"] = True
             st.balloons()
             st.rerun()
@@ -618,6 +758,8 @@ if st.session_state["clips"]:
         '<div class="card"><h3>Your Clips Ready</h3></div>',
         unsafe_allow_html=True
     )
+    if st.session_state.get("sub_debug"):
+        st.caption("Debug: " + st.session_state["sub_debug"])
     clip_names = []
     for c in st.session_state["clips"]:
         clip_names.append(c["name"])
@@ -630,7 +772,7 @@ if st.session_state["clips"]:
     sel_idx = clip_names.index(selected)
     st.session_state["selected_clip"] = sel_idx
     c = st.session_state["clips"][sel_idx]
-    st.success(c["name"] + " Ready - 1080p HD")
+    st.success(c["name"] + " Ready - 1080p HD + Subtitles Burned")
     st.video(c["data"])
     st.download_button(
         "Download " + c["name"],
