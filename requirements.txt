@@ -1,4 +1,6 @@
 flask
 imageio-ffmpeg
 openai-whisper
+gdown
+yt-dlp
 gunicorn
