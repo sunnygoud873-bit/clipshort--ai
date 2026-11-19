@@ -1,236 +1,130 @@
 import streamlit as st
-import subprocess, os, glob, random, shutil, re, requests
+import requests, os, re, subprocess, tempfile
+import imageio_ffmpeg
 
-st.set_page_config(page_title="ClipShort - #1 AI Clipping Tool", page_icon="✂️", layout="wide")
+st.set_page_config(page_title="ClipShort AI", page_icon="✂️", layout="centered")
 
-if "page" not in st.session_state:
-    st.session_state.page = "home"
-
-# --- FFMPEG FINDER ---
-def get_ffmpeg():
-    if shutil.which("ffmpeg"):
-        return "ffmpeg"
-    try:
-        import imageio_ffmpeg
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except:
-        return "ffmpeg"
-
-FFMPEG = get_ffmpeg()
-
-def get_duration(path):
-    try:
-        r = subprocess.run([FFMPEG, "-i", path], capture_output=True, text=True)
-        for line in r.stderr.split("\n"):
-            if "Duration:" in line:
-                t = line.split("Duration:")[1].split(",")[0].strip()
-                h,m,s = t.split(":")
-                return int(h)*3600 + int(m)*60 + float(s)
-    except:
-        pass
-    return 0
-
-def download_drive(drive_url, output):
-    # Drive link nunchi ID teyadam + Large file Confirm Fix
-    m = re.search(r'/d/([a-zA-Z0-9_-]+)', drive_url)
-    fid = m.group(1) if m else drive_url
-    session = requests.Session()
-    dl = f"https://drive.google.com/uc?export=download&id={fid}"
-    r = session.get(dl, stream=True)
-    for key, val in r.cookies.items():
-        if key.startswith("download_warning"):
-            dl = f"https://drive.google.com/uc?export=download&confirm={val}&id={fid}"
-            r = session.get(dl, stream=True)
-            break
-    with open(output, "wb") as f:
-        for chunk in r.iter_content(1024*1024):
-            if chunk:
-                f.write(chunk)
-    return os.path.exists(output) and os.path.getsize(output) > 1000
-
-# --- CAPTIONS + FONTS - TOTAL 8 FONTS ---
-FONTS = {
-    "🔥 Montserrat Bold - Viral": "Montserrat",
-    "💪 Bebas Neue - Gaming": "Bebas Neue",
-    "✨ Poppins Bold - Vlog": "Poppins",
-    "🎬 Anton - Cinema": "Anton",
-    "😎 Luckiest Guy - Funny": "Luckiest Guy",
-    "📱 Inter Bold - Clean": "Inter",
-    "⚡ Oswald - Sports": "Oswald",
-    "❤️ Playfair - Story": "Playfair Display",
-}
-
-def make_caption_file(text, font_name, color="&H00FFFFFF", out="caption.ass"):
-    # Safe text - FFmpeg ki problem raakunda
-    text = text.replace("\n", " ").replace(":", "\\:").replace(",", "\\,")
-    ass = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: 720
-PlayResY: 1280
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Outline, Shadow, Alignment, MarginV
-Style: Default,{font_name},52,{color},&H00000000,&H80000000,-1,3,0,2,300
-[Events]
-Format: Layer, Start, End, Style, Text
-Dialogue: 0,0:00:00.00,0:59:59.00,Default,{text}
-"""
-    with open(out, "w", encoding="utf-8") as f:
-        f.write(ass)
-    return out
-
+# --- PREMIUM THEME - FIXED ---
 st.markdown("""
 <style>
-.stApp { background-color: #000000; color: white; }
-h1, h2, h3, p { color: white !important; text-align: center; }
-div[data-testid="stButton"] > button {background:#7C3AED; color:white; border-radius:25px; border:none}
+.stApp { background: linear-gradient(180deg, #0f0c29 0%, #302b63 50%, #24243e 100%) !important; }
+h1, h2, h3, p, label { color: white !important; }
+
+/* FIXED: White Box = Black Text - Now Visible */
+.stTextInput input, .stSelectbox div[data-baseweb="select"] div {
+    background: white !important;
+    color: black !important;
+    -webkit-text-fill-color: black !important;
+    border-radius: 14px !important;
+    font-weight: 600 !important;
+}
+.stTextInput input::placeholder { color: #888 !important; -webkit-text-fill-color: #888 !important; }
+div[data-baseweb="select"] span { color: black !important; }
+div[data-baseweb="menu"] div { color: black !important; background: white !important; }
+
+.stButton button { background: linear-gradient(90deg, #FF512F, #DD2476) !important; color: white !important; border: none !important; border-radius: 50px !important; padding: 12px 28px !important; font-weight: 700 !important; width: 100%; }
+.card { background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.15); border-radius: 20px; padding: 18px; margin: 12px 0; }
+.badge { background: #FFD700; color: black; padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 800; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- TOP BAR ---
-c1, c2 = st.columns([3, 1])
-with c1:
-    st.markdown("### ✂️ ClipShort")
-with c2:
-    if st.button("Sign up - It's FREE"):
-        st.session_state.page = "app"
-        st.rerun()
+st.markdown('<div style="text-align:center"><span class="badge">✨ 100% FREE • NO WATERMARK</span><h1 style="font-size:46px;">✂️ ClipShort AI</h1><p style="font-size:18px;">Turn Any Video Into Viral Shorts in 1 Click</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="card"><b>📤 Upload - Up to 200MB</b> &nbsp;|&nbsp; ☁️ <b>Drive - Up to 4GB</b><br><small>For YouTube: YouTube Studio > Download > Upload to Drive > Paste link here</small></div>', unsafe_allow_html=True)
 
-# --- HOME PAGE ---
-if st.session_state.page == "home":
-    st.markdown("<p style='color:gray'>#1 AI VIDEO EDITOR AND CLIPPING TOOL</p>", unsafe_allow_html=True)
-    st.markdown("# Turn any footage into")
-    st.markdown("## a polished interview")
-    st.markdown("# 10x faster")
-    st.markdown("<p style='color:gray'>Paste a link or drop a raw take, and ClipShort clips, edits, sizes and publishes them to all social platforms in one click.</p>", unsafe_allow_html=True)
-    st.text_input("Drop a video link or upload a file", placeholder="Drop a video link or upload a file")
-    b1, b2 = st.columns(2)
-    with b1:
-        if st.button("Get free clips", use_container_width=True):
-            st.session_state.page = "app"
-            st.rerun()
-    with b2:
-        if st.button("Auto-edit", use_container_width=True):
-            st.session_state.page = "app"
-            st.rerun()
-    st.markdown("---")
-    st.markdown("### Used by 20M+ creators and businesses")
-    st.markdown("Grant Cardone | Scott Galloway | Logan Paul")
-    st.markdown("---")
-    st.markdown("### AI that understands every pixel of your video")
-    st.markdown("**ClipShort AI**")
-    st.markdown("Every other AI clipping tool only works with video podcasts. ClipShort turns any genre - vlogs, gaming, sports, interviews - into viral clips in 1 click.")
-    st.markdown("---")
-    st.markdown("**ReframeAnything**")
-    st.markdown("The only AI reframe model that resizes any video for any platform and keeps moving subjects centered with AI object tracking.")
-    st.markdown("---")
-    st.markdown("### Your video creation process - now on autopilot")
-    st.markdown("Auto Import | Auto Editing | Auto Scheduling")
-    st.markdown("---")
-    st.markdown("### AI that edits with you, not just for you")
-    st.markdown("Take full editing control, or let our AI take over.")
-    st.markdown("---")
-    st.markdown("### Scale your creative output")
-    st.markdown("**Brand templates** - Create brand templates with font, color, logo, intro & outro")
-    st.markdown("**Team workspace** - Collaborate with your team members")
-    st.markdown("**API** - Connect anything")
-    st.markdown("---")
-    if st.button("🚀 Get Started FREE - ClipShort", type="primary", use_container_width=True):
-        st.session_state.page = "app"
-        st.rerun()
-    st.stop()
+# --- HELPERS ---
+def get_drive_id(link):
+    m = re.search(r"/d/([a-zA-Z0-9_-]+)", link)
+    if m: return m.group(1)
+    m = re.search(r"id=([a-zA-Z0-9_-]+)", link)
+    return m.group(1) if m else None
 
-# --- APP PAGE ---
-st.markdown("# ✂️ ClipShort AI - Get Free Clips")
-st.markdown("### Turn Any Video Into Viral Shorts in 1 Click")
-video = "input.mp4"
+def download_drive(link, out_path):
+    fid = get_drive_id(link)
+    if not fid: return False
+    url = f"https://drive.google.com/uc?export=download&id={fid}"
+    r = requests.get(url, stream=True, allow_redirects=True)
+    if r.status_code != 200: return False
+    with open(out_path, "wb") as f:
+        for chunk in r.iter_content(1024*1024):
+            if chunk: f.write(chunk)
+    return os.path.getsize(out_path) > 10000
 
-# TAB 1 / TAB 2
-tab1, tab2 = st.tabs(["📤 Upload - 200MB", "☁️ Drive - 4GB Fast"])
+def get_duration(path):
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    res = subprocess.run([ffmpeg, "-i", path], capture_output=True, text=True)
+    m = re.search(r"Duration: (\d+):(\d+):(\d+)", res.stderr)
+    if m: return int(m.group(1))*3600 + int(m.group(2))*60 + int(m.group(3))
+    return 0
 
-with tab1:
-    up = st.file_uploader("📤 Drop a video file - BEST METHOD", type=['mp4','mov','mkv','webm'])
-    if up:
-        with open(video, "wb") as f:
-            f.write(up.getbuffer())
-        st.success(f"Uploaded! {up.size/1024/1024:.1f} MB ✅")
+def make_clip(input_path, output_path, start, duration, aspect, captions_on, font_name):
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    if "9:16" in aspect:
+        vf = "crop=ih*9/16:ih,scale=1080:1920"
+    elif "1:1" in aspect:
+        vf = "crop=min(iw\\,ih):min(iw\\,ih),scale=1080:1080"
+    else:
+        vf = "scale=1920:1080"
+    if captions_on:
+        vf += f",drawtext=text='CLIPSHORT AI':fontcolor=white:fontsize=48:box=1:boxcolor=black@0.6:x=(w-text_w)/2:y=h-120"
+    cmd = [ffmpeg, "-y", "-ss", str(start), "-t", str(duration), "-i", input_path, "-vf", vf, "-c:a", "aac", output_path]
+    subprocess.run(cmd, capture_output=True)
+    return os.path.exists(output_path)
 
-with tab2:
-    st.markdown("**YouTube video ayithe:** YouTube Studio > Download > Drive lo upload cheyi > ikkada link pettu")
-    drive_url = st.text_input("Paste Google Drive Link", placeholder="https://drive.google.com/file/d/... - Anyone with link cheyi")
-    if st.button("📥 Download from Drive") and drive_url:
-        with st.spinner("Drive nunchi downloading... 4GB kuda fast vasthadi..."):
-            if download_drive(drive_url, video):
-                st.success("Downloaded from Drive! ✅")
-            else:
-                st.error("Drive Link Wrong ❌ - Share > Anyone with link cheyi")
+# --- INPUTS ---
+uploaded = st.file_uploader("Choose a video file", type=["mp4","mov","mkv","webm"])
+drive_link = st.text_input("Paste Google Drive Link", placeholder="https://drive.google.com/file/d/... - Set to Anyone with link")
+yt_link = st.text_input("Or Paste YouTube Link - Info Only", placeholder="https://youtu.be/...")
+if st.button("Get Video Info"):
+    st.warning("YouTube direct download is blocked. Please download from YouTube Studio and upload here.")
 
-# YouTube Info Only
-url = st.text_input("Or Paste YouTube Link - Info Only")
-if st.button("Get Video Info") and url:
-    st.info("YouTube direct download block ayyindi bro ❌ - Studio lo Download chesi, paine Upload / Drive lo pettu")
+st.markdown('<div class="card"><h3>⚙️ Clip Settings</h3></div>', unsafe_allow_html=True)
+prompt = st.text_input("Prompt", placeholder="Moment most likely to go viral")
+col1, col2 = st.columns(2)
+with col1:
+    clip_len = st.slider("Clip Length (seconds)", 15, 60, 30)
+    aspect = st.selectbox("Aspect Ratio", ["9:16 - Shorts / Reels", "1:1 - Post", "16:9 - YouTube"])
+with col2:
+    captions = st.toggle("Auto Captions", value=True)
+    font = st.selectbox("Caption Font", ["Poppins Bold", "Montserrat Bold", "Bebas Neue", "Anton", "Oswald Bold", "Impact"])
+    num_clips = st.slider("Number of Clips", 1, 3, 1)
 
-if os.path.exists(video) and os.path.getsize(video) > 1000:
-    st.video(video)
-    duration = get_duration(video)
-    st.info(f"Video Length: {duration:.0f} seconds | File: {os.path.getsize(video)/1024/1024:.1f} MB")
-    prompt = st.text_input("Prompt", placeholder="Moment most likely to go viral")
-    num = st.selectbox("How many clips?", [3, 5, 10])
-    clip_len = st.selectbox("Clip Length", [15, 30, 45, 60])
+st.markdown('<h3 style="text-align:center;">✍️ Captions - Viral Style</h3>', unsafe_allow_html=True)
+caption_text = st.text_input("Caption Text", value="FOLLOW FOR MORE")
+caption_color = st.selectbox("Caption Color", ["White", "Yellow", "Cyan", "Pink"])
 
-    # --- CAPTIONS SECTION ---
-    st.markdown("### ✍️ Captions - Viral Style")
-    caption_on = st.checkbox("✅ Captions ON - OpusClip laaga", value=True)
-    caption_text = st.text_input("Caption Text", value="FOLLOW FOR MORE 🔥", placeholder="Nee caption rayi bro...")
-    font_choice = st.selectbox("🎨 Font Select Cheyi - 8 Fonts", list(FONTS.keys()))
-    caption_color = st.selectbox("Caption Color", ["⚪ White", "🟡 Yellow", "🟢 Neon Green", "🔴 Red", "🔵 Cyan"])
-    color_map = {"⚪ White":"&H00FFFFFF", "🟡 Yellow":"&H0000FFFF", "🟢 Neon Green":"&H0000FF00", "🔴 Red":"&H000000FF", "🔵 Cyan":"&H00FFFF00"}
+# --- PROCESS ---
+video_path = None
+if uploaded:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tf:
+        tf.write(uploaded.read())
+        video_path = tf.name
+    st.video(uploaded)
 
-    if st.button("🚀 Get Free Clips - ClipShort", type="primary", use_container_width=True):
-        for f in glob.glob("clip_*.mp4"):
-            os.remove(f)
-        if duration < 10:
-            st.error(f"Video too short: {duration:.0f} sec. Use at least 30 sec video!")
+if drive_link and st.button("Download from Drive"):
+    with st.spinner("Downloading from Drive..."):
+        tmp = tempfile.mktemp(suffix=".mp4")
+        if download_drive(drive_link, tmp):
+            video_path = tmp
+            st.success("Downloaded! Video is ready below.")
+            st.video(tmp)
         else:
-            with st.spinner(f"Generating {num} clips... Wait 1-2 mins... Do NOT refresh"):
-                made = 0
-                # Caption file okkasari create cheyi
-                cap_file = None
-                if caption_on and caption_text:
-                    cap_file = make_caption_file(caption_text, FONTS[font_choice], color_map[caption_color])
-                for i in range(num):
-                    if num == 1:
-                        start = 0
-                    else:
-                        start = int((duration - clip_len) * i / max(1, num-1))
-                        if start < 0:
-                            start = 0
-                    out = f"clip_{i+1}.mp4"
-                    vf = "crop=min(iw\\,ih*9/16):min(ih\\,iw*16/9),scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280"
-                    # Caption add cheyadam
-                    if cap_file:
-                        vf = vf + f",subtitles={cap_file}"
-                    cmd = [FFMPEG,"-y","-ss",str(start),"-t",str(clip_len),"-i",video,"-vf",vf,"-c:v","libx264","-preset","veryfast","-c:a","aac",out]
-                    r = subprocess.run(cmd, capture_output=True, text=True)
-                    if os.path.exists(out) and os.path.getsize(out) > 1000:
-                        made += 1
-                    else:
-                        st.write(f"Clip {i+1} failed: {r.stderr[-400:]}")
-                if made > 0:
-                    st.success(f"Done! {made}/{num} Clips Ready! 🔥 Scroll down!")
-                    st.balloons()
+            st.error("Download failed. Make sure link is set to 'Anyone with link'.")
+
+if video_path and st.button("🔥 Generate Viral Clips"):
+    duration = get_duration(video_path)
+    if duration == 0:
+        st.error("Could not read video. Please try another file.")
+    else:
+        with st.spinner("Generating your clips... Please wait"):
+            for i in range(num_clips):
+                start = max(0, (duration // (num_clips + 1)) * (i + 1))
+                out = tempfile.mktemp(suffix=f"_clip{i+1}.mp4")
+                ok = make_clip(video_path, out, start, min(clip_len, duration - start), aspect, captions, font)
+                if ok:
+                    st.success(f"Clip {i+1} Ready!")
+                    st.video(out)
+                    with open(out, "rb") as f:
+                        st.download_button(f"⬇️ Download Clip {i+1}", f, file_name=f"clipshort_clip{i+1}.mp4", mime="video/mp4", key=f"dl{i}")
                 else:
-                    st.error("Still failed - Check error above. Reboot chey!")
-
-    files = sorted(glob.glob("clip_*.mp4"))
-    if files:
-        st.markdown(f"### 🔥 {len(files)} Viral Clips - ClipShort")
-        for i, f in enumerate(files):
-            st.video(f)
-            score = random.randint(85, 98)
-            st.markdown(f"**Clip {i+1} | Virality: {score}/99** 🔥 | **9:16** | **ClipShort AI**")
-            with open(f,"rb") as file:
-                st.download_button(f"⬇️ Download Clip {i+1}", file, f"clip_{i+1}.mp4", "video/mp4", key=f"d{i}")
-
-    if st.button("← Back to Home"):
-        st.session_state.page = "home"
-        st.rerun()
+                    st.error(f"Failed to create Clip {i+1}")
+        st.balloons()
