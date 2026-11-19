@@ -9,18 +9,25 @@ import imageio_ffmpeg
 st.set_page_config(
     page_title="ClipShort AI",
     page_icon="✂️",
-    layout="centered"
+    layout="wide"
 )
 
 st.markdown("""
 <style>
+* { box-sizing: border-box !important; }
 .stApp { background: #0f0c29 !important; }
+.main .block-container {
+  max-width: 720px !important;
+  padding: 12px 12px 80px 12px !important;
+  margin: auto !important;
+}
 h1, h2, h3, p, label { color: white !important; }
 .stTextInput input, .stTextArea textarea {
   background: white !important;
   color: black !important;
   border-radius: 12px !important;
   font-weight: 600 !important;
+  width: 100% !important;
 }
 .stButton button {
   background: #DD2476 !important;
@@ -28,28 +35,30 @@ h1, h2, h3, p, label { color: white !important; }
   border-radius: 50px !important;
   font-weight: 700 !important;
   width: 100% !important;
-  height: 50px !important;
+  height: 52px !important;
 }
 .stDownloadButton button {
   background: #00C853 !important;
   border-radius: 12px !important;
+  width: 100% !important;
 }
 .card {
   background: rgba(255,255,255,0.10);
   border-radius: 16px;
-  padding: 16px;
-  margin: 14px 0;
-}
-.badge {
-  background: #FFD700;
-  color: black;
-  padding: 6px 14px;
-  border-radius: 20px;
-  font-weight: 800;
+  padding: 14px;
+  margin: 12px 0;
+  width: 100% !important;
 }
 video {
   border-radius: 16px !important;
-  max-height: 520px !important;
+  width: 100% !important;
+  max-height: 560px !important;
+  object-fit: contain !important;
+}
+@media (max-width: 600px) {
+  .main .block-container { padding: 8px 8px 80px 8px !important; }
+  h1 { font-size: 28px !important; }
+  video { max-height: 420px !important; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -139,7 +148,14 @@ def fmt_time(t):
     ms = int((t % 1) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-def make_srt(audio_path, srt_path, fallback_text):
+def split_lines(txt, max_words):
+    words = txt.upper().split()
+    lines = []
+    for j in range(0, len(words), max_words):
+        lines.append(" ".join(words[j:j+max_words]))
+    return lines
+
+def make_srt(audio_path, srt_path, fallback_text, max_words):
     try:
         import whisper
         model = whisper.load_model("tiny")
@@ -147,13 +163,10 @@ def make_srt(audio_path, srt_path, fallback_text):
         if result.get("segments"):
             f = open(srt_path, "w", encoding="utf-8")
             for i, seg in enumerate(result["segments"]):
-                txt = seg["text"].strip().upper()
+                txt = seg["text"].strip()
                 if not txt:
                     continue
-                words = txt.split()
-                lines = []
-                for j in range(0, len(words), 4):
-                    lines.append(" ".join(words[j:j+4]))
+                lines = split_lines(txt, max_words)
                 txt2 = "\\N".join(lines)
                 f.write(str(i + 1) + "\n")
                 f.write(fmt_time(seg["start"]) + " --> ")
@@ -164,16 +177,25 @@ def make_srt(audio_path, srt_path, fallback_text):
                 return True
     except Exception:
         pass
-    words = fallback_text.upper().split()
-    lines = []
-    for j in range(0, len(words), 4):
-        lines.append(" ".join(words[j:j+4]))
+    lines = split_lines(fallback_text, max_words)
     wrapped = "\\N".join(lines)
     f = open(srt_path, "w", encoding="utf-8")
     f.write("1\n00:00:00,000 --> 00:00:30,000\n")
     f.write(wrapped + "\n\n")
     f.close()
     return False
+
+def get_safe_font_size(font_size, max_words):
+    # If line is long, auto reduce font size - Never cut
+    if max_words <= 2:
+        return font_size
+    if max_words == 3:
+        if font_size > 20:
+            return 20
+        return font_size
+    if font_size > 18:
+        return 18
+    return font_size
 
 def make_clip(
     input_path, output_path, start, duration,
@@ -182,7 +204,8 @@ def make_clip(
     font_style, subtitle_position,
     outline_size, music_option,
     music_volume, fade_music,
-    uploaded_music_path, effect
+    uploaded_music_path, effect,
+    max_words
 ):
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     tmpdir = tempfile.mkdtemp()
@@ -227,11 +250,12 @@ def make_clip(
         ]
         subprocess.run(cmd_a, capture_output=True)
         if os.path.exists(audio_path):
-            make_srt(audio_path, srt_path, caption_text)
+            make_srt(audio_path, srt_path, caption_text, max_words)
         else:
             f = open(srt_path, "w", encoding="utf-8")
             f.write("1\n00:00:00,000 --> 00:00:30,000\n")
-            f.write(caption_text.upper() + "\n\n")
+            lines = split_lines(caption_text, max_words)
+            f.write("\\N".join(lines) + "\n\n")
             f.close()
 
         if "Montserrat" in font:
@@ -275,18 +299,23 @@ def make_clip(
             outl = outline_size
             shad = 1
 
+        # CAPTION POSITION - Safe Area for All Devices
+        # Bottom = 300 = Above Shorts Like/Comment buttons
+        # Middle = Center, Top = 140 = Below notch
         if "Middle" in subtitle_position:
             align = 5
             marg = 0
         elif "Top" in subtitle_position:
             align = 8
-            marg = 100
+            marg = 140
         else:
             align = 2
-            marg = 220
+            marg = 300
+
+        safe_size = get_safe_font_size(font_size, max_words)
 
         style = "FontName=" + ff_font
-        style += ",FontSize=" + str(font_size)
+        style += ",FontSize=" + str(safe_size)
         style += ",PrimaryColour=" + col
         style += ",OutlineColour=&H80000000&"
         style += ",BorderStyle=" + str(bstyle)
@@ -294,7 +323,8 @@ def make_clip(
         style += ",Shadow=" + str(shad)
         style += ",Alignment=" + str(align)
         style += ",MarginV=" + str(marg)
-        style += ",MarginL=60,MarginR=60,Bold=1,WrapStyle=2"
+        # MarginL/R 60 -> 130 : 130px gap left/right, never cut
+        style += ",MarginL=130,MarginR=130,Bold=1,WrapStyle=2"
         vf = base_vf + ",subtitles='" + srt_esc + "'"
         vf += ":force_style='" + style + "'"
 
@@ -354,12 +384,6 @@ def make_clip(
     return False
 
 st.markdown(
-    '<div style="text-align:center;"><span class="badge">',
-    unsafe_allow_html=True
-)
-st.markdown("100% FREE - NO WATERMARK - 1080p HD")
-st.markdown('</span></div>', unsafe_allow_html=True)
-st.markdown(
     '<h1 style="text-align:center;">ClipShort AI</h1>',
     unsafe_allow_html=True
 )
@@ -374,13 +398,14 @@ st.markdown(
 )
 uploaded = st.file_uploader(
     "Choose a video file",
-    type=["mp4", "mov", "mkv", "webm"]
+    type=["mp4", "mov", "mkv", "webm"],
+    use_container_width=True
 )
 drive_link = st.text_input(
     "Paste Google Drive Link",
     placeholder="https://drive.google.com/file/d/..."
 )
-if drive_link and st.button("Download from Drive"):
+if drive_link and st.button("Download from Drive", use_container_width=True):
     with st.spinner("Downloading..."):
         tmp = tempfile.mktemp(suffix=".mp4")
         if download_drive(drive_link, tmp):
@@ -420,18 +445,17 @@ aspect = st.selectbox(
     "Aspect Ratio",
     ["9:16 - Shorts / Reels", "1:1 - Post", "16:9 - YouTube"]
 )
-quality = st.selectbox(
-    "Video Quality",
-    ["1080p - HD", "720p - Fast"]
-)
 num_clips = st.slider("Number of Clips", 1, 3, 1)
 captions = st.toggle("Auto Captions", value=True)
 
+# STEP 3 - CAPTION POSITION + STYLE - LIKE OPUS CLIP
 st.markdown(
-    '<div class="card"><h3>3. Captions - Font Size and Style</h3></div>',
+    '<div class="card"><h3>3. Captions - Position and Style</h3></div>',
     unsafe_allow_html=True
 )
 caption_text = st.text_input("Caption Text", value="FOLLOW FOR MORE")
+st.caption("Preview like Opus: Word Cut = 2 words per line, never cuts")
+
 c1, c2 = st.columns(2)
 with c1:
     font = st.selectbox(
@@ -450,15 +474,24 @@ with c2:
         "Caption Color",
         ["Yellow", "White", "Cyan", "Pink", "Green", "Orange"]
     )
+
+# NEW: Words Per Line - Main Cut Fix
 c3, c4 = st.columns(2)
 with c3:
-    font_size = st.slider("Font Size", 14, 48, 22)
-    if font_size <= 26:
-        st.caption("Perfect - Will not cut off")
-    elif font_size <= 34:
-        st.caption("Large - Will show in 2 lines")
+    words_opt = st.selectbox(
+        "Words Per Line - Anti Cut",
+        [
+            "2 Words - Word Cut - Safest - Opus Style",
+            "3 Words - Balanced",
+            "4 Words - Long - May Cut on Phone"
+        ]
+    )
+    if "2 Words" in words_opt:
+        max_words = 2
+    elif "3 Words" in words_opt:
+        max_words = 3
     else:
-        st.caption("Very Large - May cut off")
+        max_words = 4
 with c4:
     font_style = st.selectbox(
         "Subtitle Style",
@@ -469,14 +502,29 @@ with c4:
             "Shadow - Cinematic"
         ]
     )
+
 c5, c6 = st.columns(2)
 with c5:
-    subtitle_position = st.selectbox(
-        "Subtitle Position",
-        ["Bottom Center - Reels", "Middle Center", "Top Center"]
-    )
+    font_size = st.slider("Font Size", 14, 48, 22)
+    if font_size <= 26:
+        st.caption("Perfect - Will not cut off")
+    elif font_size <= 34:
+        st.caption("Large - Will show in 2 lines")
+    else:
+        st.caption("Very Large - May cut off")
 with c6:
     outline_size = st.slider("Outline Thickness", 1, 5, 2)
+
+# NEW: Caption Position - Safe Area
+subtitle_position = st.selectbox(
+    "Caption Position - Safe Area",
+    [
+        "Bottom Center - Safe for Shorts - Above Buttons",
+        "Middle Center - Face Video",
+        "Top Center - Below Notch"
+    ]
+)
+st.caption("Bottom = 300px above bottom, so Like/Comment buttons do not hide text")
 
 st.markdown(
     '<div class="card"><h3>4. Background Music</h3></div>',
@@ -526,7 +574,7 @@ effect = st.selectbox(
 )
 
 if video_path and os.path.exists(video_path):
-    if st.button("Generate Viral Clips"):
+    if st.button("Generate Viral Clips", use_container_width=True):
         duration = get_duration(video_path)
         if duration == 0:
             st.error("Could not read video. Re-upload.")
@@ -555,7 +603,8 @@ if video_path and os.path.exists(video_path):
                         font_style, subtitle_position,
                         outline_size, music_option,
                         music_volume, fade_music,
-                        uploaded_music_path, effect
+                        uploaded_music_path, effect,
+                        max_words
                     )
                     if ok:
                         f = open(out, "rb")
@@ -590,14 +639,13 @@ if st.session_state["clips"]:
     st.session_state["selected_clip"] = sel_idx
     c = st.session_state["clips"][sel_idx]
     st.success(c["name"] + " Ready - 1080p HD")
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.video(c["data"])
+    st.video(c["data"])
     st.download_button(
         "Download " + c["name"],
         c["data"],
         file_name="clipshort_clip.mp4",
-        mime="video/mp4"
+        mime="video/mp4",
+        use_container_width=True
     )
 
     if st.session_state["viral_done"]:
@@ -615,10 +663,7 @@ if st.session_state["clips"]:
         t3 = base_topic + " - Watch Till End!"
         titles = [t1, t2, t3]
         st.write("Copy and paste into YouTube Title:")
-        selected_title = st.selectbox(
-            "Choose Best Title",
-            titles
-        )
+        selected_title = st.selectbox("Choose Best Title", titles)
         st.text_input("Your Viral Title", value=selected_title)
         desc = selected_title + "\n\n"
         desc += base_topic + " - This is the most viral moment. "
