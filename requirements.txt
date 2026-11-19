@@ -1,0 +1,5 @@
+streamlit>=1.40
+faster-whisper>=1.1
+imageio-ffmpeg>=0.5
+yt-dlp>=2025.1.15
+openai>=1.60
