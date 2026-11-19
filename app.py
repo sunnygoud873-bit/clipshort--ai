@@ -1,816 +1,170 @@
-import streamlit as st
-import requests
-import os
-import re
-import subprocess
-import tempfile
+# app.py - ALL IN ONE - ClipShort.com Style
+# Files needed: app.py + requirements.txt + Procfile - Anthe!
+# Run: python app.py -> http://localhost:5000
+
+from flask import Flask, request, jsonify, send_file
+import os, re, subprocess, tempfile, uuid
 import imageio_ffmpeg
 
-st.set_page_config(
-    page_title="ClipShort AI",
-    page_icon="✂️",
-    layout="wide"
-)
+app = Flask(__name__)
+os.makedirs("uploads", exist_ok=True)
+os.makedirs("outputs", exist_ok=True)
+FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 
-# ================= UI COLOUR MANAGEMENT =================
-THEMES = {
-    "Dark Purple - Default": {
-        "bg": "#0f0c29",
-        "card": "rgba(255,255,255,0.10)",
-        "text": "#FFFFFF",
-        "subtext": "#B0B0B0",
-        "primary": "#DD2476",
-        "primary2": "#FF512F",
-        "success": "#00C853",
-        "input_bg": "#FFFFFF",
-        "input_text": "#000000",
-    },
-    "Neon Black - Gaming": {
-        "bg": "#000000",
-        "card": "rgba(0,255,136,0.08)",
-        "text": "#FFFFFF",
-        "subtext": "#00FF88",
-        "primary": "#00FF88",
-        "primary2": "#00D4FF",
-        "success": "#00FF88",
-        "input_bg": "#1A1A1A",
-        "input_text": "#FFFFFF",
-    },
-    "Clean White - Light": {
-        "bg": "#F5F5F5",
-        "card": "#FFFFFF",
-        "text": "#000000",
-        "subtext": "#666666",
-        "primary": "#6C5CE7",
-        "primary2": "#A29BFE",
-        "success": "#00B894",
-        "input_bg": "#FFFFFF",
-        "input_text": "#000000",
-    },
-}
+CAPTION_COLOURS = {"Yellow":"&H00FFFF&","White":"&HFFFFFF&","Cyan":"&HFFFF00&","Pink":"&HFF00FF&","Green":"&H00FF00&","Orange":"&H0080FF&","Red":"&H0000FF&"}
 
-CAPTION_COLOURS = {
-    "Yellow": "&H00FFFF&",
-    "White": "&HFFFFFF&",
-    "Cyan": "&HFFFF00&",
-    "Pink": "&HFF00FF&",
-    "Green": "&H00FF00&",
-    "Orange": "&H0080FF&",
-    "Red": "&H0000FF&",
-    "Neon Green": "&H00FF88&",
-}
-
-PREVIEW_COLOURS = {
-    "Yellow": "#FFE600",
-    "White": "#FFFFFF",
-    "Cyan": "#00E5FF",
-    "Pink": "#FF00AA",
-    "Green": "#00FF00",
-    "Orange": "#FF8000",
-    "Red": "#FF0000",
-    "Neon Green": "#00FF88",
-}
-
-if "ui_theme" not in st.session_state:
-    st.session_state["ui_theme"] = "Dark Purple - Default"
-
-theme_name = st.sidebar.selectbox(
-    "UI Theme - Colour Management",
-    list(THEMES.keys()),
-    index=list(THEMES.keys()).index(st.session_state["ui_theme"])
-)
-st.session_state["ui_theme"] = theme_name
-T = THEMES[theme_name]
-
-st.markdown(f"""
+HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>ClipShort.com - Viral Shorts Maker</title>
 <style>
-* {{ box-sizing: border-box !important; }}
-.stApp {{ background: {T['bg']} !important; }}
-.main .block-container {{
-  max-width: 720px !important;
-  padding: 12px 12px 80px 12px !important;
-  margin: auto !important;
-}}
-h1, h2, h3, p, label, span {{ color: {T['text']} !important; }}
-.stCaption, small {{ color: {T['subtext']} !important; }}
-.stTextInput input, .stTextArea textarea {{
-  background: {T['input_bg']} !important;
-  color: {T['input_text']} !important;
-  border-radius: 12px !important;
-  font-weight: 600 !important;
-  width: 100% !important;
-  border: 2px solid {T['primary']} !important;
-}}
-.stSelectbox > div > div {{
-  background: {T['input_bg']} !important;
-  color: {T['input_text']} !important;
-  border-radius: 12px !important;
-}}
-.stButton button {{
-  background: linear-gradient(90deg, {T['primary']}, {T['primary2']}) !important;
-  color: white !important;
-  border-radius: 50px !important;
-  font-weight: 700 !important;
-  width: 100% !important;
-  height: 52px !important;
-  border: none !important;
-}}
-.stDownloadButton button {{
-  background: {T['success']} !important;
-  color: white !important;
-  border-radius: 12px !important;
-  width: 100% !important;
-  border: none !important;
-}}
-.stFileUploader, .stFileUploader > div {{ width: 100% !important; }}
-.card {{
-  background: {T['card']};
-  border: 1px solid {T['primary']};
-  border-radius: 16px;
-  padding: 14px;
-  margin: 12px 0;
-  width: 100% !important;
-}}
-.colour-preview {{
-  width: 100%;
-  height: 48px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 800;
-  font-size: 20px;
-  margin: 8px 0;
-  border: 2px solid white;
-}}
-video {{
-  border-radius: 16px !important;
-  width: 100% !important;
-  max-height: 560px !important;
-  object-fit: contain !important;
-  border: 2px solid {T['primary']} !important;
-}}
-@media (max-width: 600px) {{
-  .main .block-container {{ padding: 8px 8px 80px 8px !important; }}
-  h1 {{ font-size: 28px !important; }}
-  video {{ max-height: 420px !important; }}
-}}
-</style>
-""", unsafe_allow_html=True)
-
-if "video_path" not in st.session_state:
-    st.session_state["video_path"] = None
-if "clips" not in st.session_state:
-    st.session_state["clips"] = []
-if "selected_clip" not in st.session_state:
-    st.session_state["selected_clip"] = 0
-if "viral_done" not in st.session_state:
-    st.session_state["viral_done"] = False
-if "sub_debug" not in st.session_state:
-    st.session_state["sub_debug"] = ""
-
-def get_drive_id(link):
-    m = re.search(r"/d/([a-zA-Z0-9_-]+)", link)
-    if m:
-        return m.group(1)
-    m = re.search(r"id=([a-zA-Z0-9_-]+)", link)
-    if m:
-        return m.group(1)
-    return None
-
-def download_drive(link, out_path):
-    fid = get_drive_id(link)
-    if not fid:
-        st.error("Could not find ID in link")
-        return False
-    try:
-        import gdown
-        url = "https://drive.google.com/uc?id=" + fid
-        gdown.download(url, out_path, quiet=True, fuzzy=True)
-        if os.path.exists(out_path):
-            if os.path.getsize(out_path) > 10000:
-                f = open(out_path, "rb")
-                h = f.read(30)
-                f.close()
-                if b"<html" not in h.lower():
-                    return True
-    except Exception:
-        pass
-    try:
-        session = requests.Session()
-        url = "https://drive.google.com/uc?export=download&id=" + fid
-        r = session.get(url, stream=True)
-        for key, val in r.cookies.items():
-            if key.startswith("download_warning"):
-                url = "https://drive.google.com/uc?export=download&confirm=" + val + "&id=" + fid
-                r = session.get(url, stream=True)
-                break
-        f = open(out_path, "wb")
-        for chunk in r.iter_content(1024 * 1024):
-            if chunk:
-                f.write(chunk)
-        f.close()
-        if os.path.exists(out_path):
-            if os.path.getsize(out_path) > 10000:
-                f = open(out_path, "rb")
-                h = f.read(30)
-                f.close()
-                if b"<html" not in h.lower():
-                    return True
-                st.error("Set Drive to Anyone with link")
-                return False
-    except Exception:
-        st.error("Download error")
-    return False
-
-def get_duration(path):
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    res = subprocess.run(
-        [ffmpeg, "-i", path],
-        capture_output=True,
-        text=True
-    )
-    m = re.search(r"Duration: (\d+):(\d+):(\d+)", res.stderr)
-    if m:
-        h = int(m.group(1))
-        mi = int(m.group(2))
-        s = int(m.group(3))
-        return h * 3600 + mi * 60 + s
-    return 0
-
-def fmt_time(t):
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = int(t % 60)
-    ms = int((t % 1) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+*{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',system-ui,sans-serif}
+body{background:#0f0c29;color:white;min-height:100vh}
+header{background:rgba(255,255,255,.08);padding:14px 20px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:10}
+.logo{font-size:22px;font-weight:900}.logo span{color:#DD2476}
+nav a{color:#ccc;text-decoration:none;margin-left:18px;font-size:14px}
+.hero{text-align:center;padding:36px 16px 10px}
+.hero h1{font-size:42px;line-height:1.1}.hero h1 span{background:linear-gradient(90deg,#DD2476,#FF512F);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero p{color:#bbb;margin-top:10px}
+.container{max-width:720px;margin:20px auto;padding:0 14px 60px}
+.card{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:20px;padding:18px;margin:14px 0}
+.card h3{margin-bottom:12px}
+.upload-box{border:2px dashed #DD2476;border-radius:16px;padding:28px;text-align:center;cursor:pointer;background:rgba(221,36,118,.08);display:block}
+.upload-box input{display:none}
+label{font-size:13px;color:#ccc;display:block;margin:12px 0 6px}
+input[type=text],select{width:100%;padding:12px;border-radius:12px;border:2px solid #DD2476;outline:none;font-weight:600}
+input[type=range]{width:100%;accent-color:#DD2476}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.colour-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.colour-btn{width:44px;height:44px;border-radius:50%;border:3px solid transparent;cursor:pointer}
+.colour-btn.active{border-color:white;transform:scale(1.1)}
+.preview{height:52px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:20px;color:#000;margin-top:10px;border:2px solid white}
+.btn{width:100%;padding:16px;border:none;border-radius:50px;background:linear-gradient(90deg,#DD2476,#FF512F);color:white;font-size:17px;font-weight:800;cursor:pointer;margin-top:16px}
+.btn:disabled{opacity:.6}
+.progress{display:none;text-align:center;padding:20px}
+.spinner{width:40px;height:40px;border:4px solid #333;border-top:4px solid #DD2476;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 10px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.result{display:none}
+video{width:100%;border-radius:16px;margin-top:12px;max-height:520px;background:#000}
+.download{display:block;text-align:center;background:#00C853;color:white;padding:14px;border-radius:12px;text-decoration:none;font-weight:700;margin-top:12px}
+@media(max-width:600px){.hero h1{font-size:30px}.row{grid-template-columns:1fr}header nav{display:none}}
+</style></head>
+<body>
+<header><div class="logo">✂️ ClipShort<span>.com</span></div><nav><a href="#">Home</a><a href="#">Features</a><a href="#">Pricing</a></nav></header>
+<div class="hero"><h1>Turn Any Video Into<br><span>Viral Shorts</span></h1><p>Just like Opus Clip - Auto Captions, Music, Effects in 1 Click</p></div>
+<div class="container">
+<form id="form">
+<div class="card"><h3>1. Upload Your Video</h3><label class="upload-box">📁 Click to Upload Video<input type="file" id="video" accept="video/*" required><div id="fileName">No file selected</div></label></div>
+<div class="card"><h3>2. Clip Settings</h3><label>Clip Length - <span id="lenVal">30</span> Sec</label><input type="range" id="clip_len" min="15" max="60" value="30"><label>Caption Text</label><input type="text" id="caption_text" value="FOLLOW FOR MORE"></div>
+<div class="card"><h3>3. Captions - Colour</h3><label>Caption Colour</label><div class="colour-row" id="colours"></div><div class="preview" id="preview">FOLLOW FOR MORE</div><div class="row"><div><label>Font Size - <span id="fontVal">22</span></label><input type="range" id="font_size" min="14" max="48" value="22"></div><div><label>Effect</label><select id="effect"><option>Vibrant</option><option>Cinematic</option><option>Black and White</option><option>No Effect</option></select></div></div></div>
+<div class="card"><h3>4. Music (Optional)</h3><label class="upload-box">🎵 Upload MP3<input type="file" id="music" accept="audio/*"><div id="musicName">No music</div></label></div>
+<button class="btn" type="submit" id="genBtn">✨ Generate Viral Clip</button>
+</form>
+<div class="progress" id="progress"><div class="spinner"></div><p>Generating... Burning Subtitles...</p></div>
+<div class="card result" id="result"><h3>✅ Your Clip Ready!</h3><p id="subInfo"></p><video id="vid" controls playsinline></video><a class="download" id="dl" href="#" download>⬇️ Download Clip</a></div>
+</div>
+<script>
+const cols={Yellow:'#FFE600',White:'#FFFFFF',Cyan:'#00E5FF',Pink:'#FF00AA',Green:'#00FF00',Orange:'#FF8000',Red:'#FF0000'};
+let sel='Yellow'; const wrap=document.getElementById('colours');
+Object.keys(cols).forEach(k=>{const b=document.createElement('div'); b.className='colour-btn'+(k==='Yellow'?' active':''); b.style.background=cols[k]; b.title=k; b.onclick=()=>{sel=k; document.querySelectorAll('.colour-btn').forEach(x=>x.classList.remove('active')); b.classList.add('active'); updatePreview();}; wrap.appendChild(b);});
+function updatePreview(){const p=document.getElementById('preview'); p.style.background=cols[sel]; p.textContent=document.getElementById('caption_text').value.toUpperCase()+' - '+sel;}
+document.getElementById('caption_text').addEventListener('input',updatePreview); updatePreview();
+document.getElementById('video').addEventListener('change',e=>{document.getElementById('fileName').textContent=e.target.files[0]?.name||'No file';});
+document.getElementById('music').addEventListener('change',e=>{document.getElementById('musicName').textContent=e.target.files[0]?.name||'No music';});
+document.getElementById('clip_len').addEventListener('input',e=>document.getElementById('lenVal').textContent=e.target.value);
+document.getElementById('font_size').addEventListener('input',e=>document.getElementById('fontVal').textContent=e.target.value);
+document.getElementById('form').addEventListener('submit',async e=>{e.preventDefault(); const fd=new FormData(); fd.append('video',document.getElementById('video').files[0]); const m=document.getElementById('music').files[0]; if(m) fd.append('music',m); fd.append('caption_text',document.getElementById('caption_text').value); fd.append('caption_color',sel); fd.append('clip_len',document.getElementById('clip_len').value); fd.append('font_size',document.getElementById('font_size').value); fd.append('effect',document.getElementById('effect').value); document.getElementById('progress').style.display='block'; document.getElementById('result').style.display='none'; document.getElementById('genBtn').disabled=true; document.getElementById('genBtn').textContent='Generating...'; try{const r=await fetch('/generate',{method:'POST',body:fd}); const d=await r.json(); if(d.success){const c=d.clips[0]; document.getElementById('vid').src=c.url; document.getElementById('dl').href=c.url; document.getElementById('subInfo').textContent='Subtitles: '+c.subtitles+' - Burned'; document.getElementById('result').style.display='block';} else alert('Error: '+d.error);}catch(err){alert('Failed: '+err);} document.getElementById('progress').style.display='none'; document.getElementById('genBtn').disabled=false; document.getElementById('genBtn').textContent='✨ Generate Viral Clip';});
+</script></body></html>"""
 
 def fmt_ass_time(t):
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = int(t % 60)
-    cs = int((t % 1) * 100)
+    h=int(t//3600); m=int((t%3600)//60); s=int(t%60); cs=int((t%1)*100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-def split_lines(txt, max_words):
-    words = txt.upper().split()
-    lines = []
-    for j in range(0, len(words), max_words):
-        lines.append(" ".join(words[j:j+max_words]))
-    return lines
+def split_lines(txt, max_words=2):
+    words=txt.upper().split()
+    return [" ".join(words[j:j+max_words]) for j in range(0,len(words),max_words)]
 
-def write_ass(ass_path, segments, font_name, font_size, colour, bstyle, outline, shadow, align, marg_v):
-    # ASS header - Style ikkade fix, FFmpeg ki force_style avasaram ledu
-    header = "[Script Info]\n"
-    header += "ScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n"
-    header += "[V4+ Styles]\n"
-    header += "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-    # BackColour black with alpha 80 = &H80000000&
-    style_line = f"Style: Default,{font_name},{font_size},{colour},&HFFFFFF&,&H80000000&,&H80000000&,-1,0,0,0,100,100,0,0,{bstyle},{outline},{shadow},{align},130,130,{marg_v},1\n\n"
-    header += style_line
-    header += "[Events]\n"
-    header += "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-    body = ""
-    for (s, e, txt) in segments:
-        # ASS lo new line = \\N
-        txt_esc = txt.replace(",", " ").replace(":", " ")
-        body += f"Dialogue: 0,{fmt_ass_time(s)},{fmt_ass_time(e)},Default,,0,0,0,,{txt_esc}\n"
-    f = open(ass_path, "w", encoding="utf-8")
-    f.write(header + body)
-    f.close()
-    return os.path.getsize(ass_path)
+def write_ass(ass_path, segments, font_size, colour):
+    h="[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+    h+=f"Style: Default,Arial Black,{font_size},{colour},&HFFFFFF&,&H80000000&,&H80000000&,-1,0,0,0,100,100,0,0,3,2,1,2,130,130,300,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    b=""
+    for s,e,txt in segments:
+        b+=f"Dialogue: 0,{fmt_ass_time(s)},{fmt_ass_time(e)},Default,,0,0,0,,{txt.replace(',',' ').replace(':',' ')}\n"
+    open(ass_path,"w",encoding="utf-8").write(h+b)
 
-def make_ass_from_audio(audio_path, ass_path, fallback_text, max_words, duration, style_params):
-    font_name, font_size, colour, bstyle, outline, shadow, align, marg_v = style_params
-    segments = []
-    whisper_ok = False
+def get_duration(path):
+    res=subprocess.run([FFMPEG,"-i",path],capture_output=True,text=True)
+    m=re.search(r"Duration: (\d+):(\d+):(\d+)",res.stderr)
+    return int(m.group(1))*3600+int(m.group(2))*60+int(m.group(3)) if m else 0
+
+@app.route("/")
+def home():
+    return HTML
+
+@app.route("/generate", methods=["POST"])
+def generate():
     try:
-        import whisper
-        model = whisper.load_model("tiny")
-        result = model.transcribe(audio_path, fp16=False)
-        if result.get("segments"):
-            for seg in result["segments"]:
-                txt = seg["text"].strip()
-                if not txt:
-                    continue
-                lines = split_lines(txt, max_words)
-                txt2 = "\\N".join(lines)
-                segments.append((seg["start"], seg["end"], txt2))
-            if len(segments) > 0:
-                whisper_ok = True
+        video=request.files.get("video")
+        if not video: return jsonify({"error":"No video"}),400
+        caption_text=request.form.get("caption_text","FOLLOW FOR MORE")
+        caption_color=request.form.get("caption_color","Yellow")
+        clip_len=int(request.form.get("clip_len",30))
+        font_size=int(request.form.get("font_size",22))
+        effect=request.form.get("effect","Vibrant")
+        music=request.files.get("music")
+        uid=str(uuid.uuid4())[:8]
+        in_path=os.path.join("uploads",f"{uid}_{video.filename}")
+        video.save(in_path)
+        total=get_duration(in_path)
+        if total==0: return jsonify({"error":"Could not read video"}),400
+        music_path=None
+        if music and music.filename!="":
+            music_path=os.path.join("uploads",f"{uid}_music.mp3")
+            music.save(music_path)
+        eff=",eq=contrast=1.15:saturation=1.4:brightness=0.05" if effect=="Vibrant" else ",eq=contrast=1.2:brightness=-0.05:saturation=1.1" if effect=="Cinematic" else ",hue=s=0,eq=contrast=1.1" if effect=="Black and White" else ""
+        start=total//2; dur=min(clip_len,total-start)
+        tmpdir=tempfile.mkdtemp()
+        ass_path=os.path.join(tmpdir,"subs.ass")
+        ass_esc=ass_path.replace("\\","/").replace(":","\\:").replace("'","\\'")
+        colour=CAPTION_COLOURS.get(caption_color,"&H00FFFF&")
+        audio_path=os.path.join(tmpdir,"audio.wav")
+        subprocess.run([FFMPEG,"-y","-ss",str(start),"-t",str(dur),"-i",in_path,"-vn","-ac","1","-ar","16000",audio_path],capture_output=True)
+        segments=[]; whisper_ok=False
+        try:
+            import whisper
+            model=whisper.load_model("tiny")
+            result=model.transcribe(audio_path,fp16=False)
+            if result.get("segments"):
+                for seg in result["segments"]:
+                    txt=seg["text"].strip()
+                    if not txt: continue
+                    segments.append((seg["start"],seg["end"],"\\N".join(split_lines(txt,2))))
+                if segments: whisper_ok=True
+        except: whisper_ok=False
+        if not whisper_ok or not segments:
+            lines=split_lines(caption_text,2)
+            chunk=max(4,dur/max(1,len(lines)))
+            for idx,ln in enumerate(lines):
+                s=idx*chunk; e=min(dur,s+chunk)
+                if s<dur: segments.append((s,e,ln))
+            if not segments: segments.append((0,dur,"\\N".join(lines)))
+        write_ass(ass_path,segments,font_size,colour)
+        vf="crop=ih*9/16:ih,scale=1080:1920:force_original_aspect_ratio=disable"+eff+",subtitles='"+ass_esc+"'"
+        out_name=f"clip_{uid}.mp4"; out_path=os.path.join("outputs",out_name)
+        if music_path:
+            af="[0:a]volume=1.0[a0];[1:a]volume=0.2[a1];[a0][a1]amix=inputs=2:duration=first[aout]"
+            cmd=[FFMPEG,"-y","-ss",str(start),"-t",str(dur),"-i",in_path,"-stream_loop","-1","-i",music_path,"-vf",vf,"-filter_complex",af,"-map","0:v","-map","[aout]","-c:v","libx264","-c:a","aac","-preset","fast","-crf","23","-shortest",out_path]
+        else:
+            cmd=[FFMPEG,"-y","-ss",str(start),"-t",str(dur),"-i",in_path,"-vf",vf,"-c:v","libx264","-c:a","aac","-preset","fast","-crf","23",out_path]
+        subprocess.run(cmd,capture_output=True)
+        if os.path.exists(out_path):
+            return jsonify({"success":True,"clips":[{"name":out_name,"url":f"/download/{out_name}","subtitles":f"{len(segments)} lines"}]})
+        return jsonify({"error":"Failed"}),500
     except Exception as e:
-        whisper_ok = False
-    if not whisper_ok or len(segments) == 0:
-        # FALLBACK - 100% Guarantee subtitles vasthayi
-        # Caption text ni 3 parts ga split chesi full duration ki pettam
-        lines = split_lines(fallback_text, max_words)
-        # Prathi 5 sec ki oka line chupistham - Video motham subtitles untayi
-        chunk = max(4, duration / max(1, len(lines)))
-        for i, ln in enumerate(lines):
-            s = i * chunk
-            e = min(duration, s + chunk)
-            if s < duration:
-                segments.append((s, e, ln))
-        if len(segments) == 0:
-            segments.append((0, duration, "\\N".join(lines)))
-    size = write_ass(ass_path, segments, font_name, font_size, colour, bstyle, outline, shadow, align, marg_v)
-    return whisper_ok, len(segments), size
+        return jsonify({"error":str(e)}),500
 
-def get_safe_font_size(font_size, max_words):
-    if max_words <= 2:
-        return font_size
-    if max_words == 3:
-        if font_size > 20:
-            return 20
-        return font_size
-    if font_size > 18:
-        return 18
-    return font_size
+@app.route("/download/<name>")
+def download(name):
+    return send_file(os.path.join("outputs",name),as_attachment=True)
 
-def make_clip(
-    input_path, output_path, start, duration,
-    aspect, captions_on, caption_text,
-    caption_color, font, font_size,
-    font_style, subtitle_position,
-    outline_size, music_option,
-    music_volume, fade_music,
-    uploaded_music_path, effect,
-    max_words
-):
-    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    tmpdir = tempfile.mkdtemp()
-    ass_path = os.path.join(tmpdir, "subs.ass")
-    # FFmpeg ki path escape - Windows / Linux rendu work avvali
-    ass_esc = ass_path.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-
-    if "9:16" in aspect:
-        base_crop = "crop=ih*9/16:ih,scale=1080:1920:force_original_aspect_ratio=disable"
-    elif "1:1" in aspect:
-        base_crop = "crop=min(iw\\,ih):min(iw\\,ih),scale=1080:1080"
-    else:
-        base_crop = "scale=1920:1080:force_original_aspect_ratio=disable"
-
-    if "Vibrant" in effect:
-        eff = ",eq=contrast=1.15:saturation=1.4:brightness=0.05"
-    elif "Cinematic" in effect:
-        eff = ",eq=contrast=1.2:brightness=-0.05:saturation=1.1"
-    elif "Black" in effect:
-        eff = ",hue=s=0,eq=contrast=1.1"
-    elif "Vintage" in effect:
-        eff = ",eq=contrast=1.1:brightness=0.03:saturation=0.8"
-    elif "Sharpen" in effect:
-        eff = ",unsharp=5:5:1.0:5:5:0.0,eq=contrast=1.1:saturation=1.2"
-    elif "Dark Mode" in effect:
-        eff = ",eq=contrast=1.2:brightness=-0.08:saturation=1.2"
-    else:
-        eff = ""
-
-    base_vf = base_crop + eff
-    vf = base_vf
-
-    sub_status = "OFF"
-    if captions_on:
-        # Font map
-        if "Montserrat" in font:
-            ff_font = "Arial Black"
-        elif "Bebas" in font:
-            ff_font = "Arial Narrow"
-        elif "Anton" in font:
-            ff_font = "Impact"
-        elif "Impact" in font:
-            ff_font = "Impact"
-        else:
-            ff_font = "Arial"
-
-        col = CAPTION_COLOURS.get(caption_color, "&H00FFFF&")
-
-        if "No Box" in font_style:
-            bstyle = 1
-            outl = outline_size
-            shad = 0
-        elif "Outline Only" in font_style:
-            bstyle = 1
-            outl = outline_size + 1
-            shad = 0
-        elif "Shadow" in font_style:
-            bstyle = 1
-            outl = 1
-            shad = 2
-        else:
-            bstyle = 3
-            outl = outline_size
-            shad = 1
-
-        if "Middle" in subtitle_position:
-            align = 5
-            marg = 0
-        elif "Top" in subtitle_position:
-            align = 8
-            marg = 140
-        else:
-            align = 2
-            marg = 300
-
-        safe_size = get_safe_font_size(font_size, max_words)
-        style_params = (ff_font, safe_size, col, bstyle, outl, shad, align, marg)
-
-        # Audio extract chesi Whisper ki ivvu
-        audio_path = os.path.join(tmpdir, "audio.wav")
-        cmd_a = [
-            ffmpeg, "-y",
-            "-ss", str(start),
-            "-t", str(duration),
-            "-i", input_path,
-            "-vn", "-ac", "1", "-ar", "16000",
-            audio_path
-        ]
-        subprocess.run(cmd_a, capture_output=True)
-        if os.path.exists(audio_path):
-            whisper_ok, nseg, sz = make_ass_from_audio(
-                audio_path, ass_path, caption_text, max_words, duration, style_params
-            )
-            if whisper_ok:
-                sub_status = f"Whisper OK - {nseg} lines - {sz} bytes"
-            else:
-                sub_status = f"Fallback Text - {nseg} lines - {sz} bytes - Whisper failed, kani subtitles vasthayi"
-        else:
-            # Audio lekapoina ASS create cheyi
-            lines = split_lines(caption_text, max_words)
-            segs = []
-            chunk = max(4, duration / max(1, len(lines)))
-            for i, ln in enumerate(lines):
-                segs.append((i * chunk, min(duration, (i + 1) * chunk), ln))
-            sz = write_ass(ass_path, segs, ff_font, safe_size, col, bstyle, outl, shad, align, marg)
-            sub_status = f"No Audio - Fallback - {sz} bytes"
-
-        # SUBTITLES FIX: force_style vadakunda, direct ASS file
-        # ASS lone style undi kabatti FFmpeg direct ga burn chesthadi
-        vf = base_vf + ",subtitles='" + ass_esc + "'"
-        st.session_state["sub_debug"] = sub_status
-
-    music_path = None
-    if music_option != "No Music":
-        if uploaded_music_path:
-            if os.path.exists(uploaded_music_path):
-                music_path = uploaded_music_path
-
-    if music_path:
-        mv = music_volume / 100.0
-        if fade_music:
-            af = "[0:a]volume=1.0[a0];"
-            af += "[1:a]volume=" + str(mv)
-            af += ",afade=t=in:st=0:d=1"
-            af += ",afade=t=out:st=" + str(duration - 1) + ":d=1[a1];"
-            af += "[a0][a1]amix=inputs=2:duration=first[aout]"
-        else:
-            af = "[0:a]volume=1.0[a0];"
-            af += "[1:a]volume=" + str(mv) + "[a1];"
-            af += "[a0][a1]amix=inputs=2:duration=first[aout]"
-        cmd = [
-            ffmpeg, "-y",
-            "-ss", str(start),
-            "-t", str(duration),
-            "-i", input_path,
-            "-stream_loop", "-1",
-            "-i", music_path,
-            "-vf", vf,
-            "-filter_complex", af,
-            "-map", "0:v",
-            "-map", "[aout]",
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-preset", "fast",
-            "-crf", "23",
-            "-shortest", output_path
-        ]
-    else:
-        cmd = [
-            ffmpeg, "-y",
-            "-ss", str(start),
-            "-t", str(duration),
-            "-i", input_path,
-            "-vf", vf,
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-preset", "fast",
-            "-crf", "23",
-            output_path
-        ]
-
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    if os.path.exists(output_path):
-        if os.path.getsize(output_path) > 10000:
-            return True, sub_status
-    # FFmpeg error unte chupinchu - Subtitle error aithe telusthadi
-    st.session_state["sub_debug"] = "FFmpeg Error: " + res.stderr[-500:]
-    return False, sub_status
-
-st.markdown(
-    '<h1 style="text-align:center;">ClipShort AI</h1>',
-    unsafe_allow_html=True
-)
-st.markdown(
-    '<p style="text-align:center;">Turn Any Video Into Viral Shorts</p>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="card"><h3>1. Upload Your Video</h3></div>',
-    unsafe_allow_html=True
-)
-uploaded = st.file_uploader(
-    "Choose a video file",
-    type=["mp4", "mov", "mkv", "webm"]
-)
-drive_link = st.text_input(
-    "Paste Google Drive Link",
-    placeholder="https://drive.google.com/file/d/..."
-)
-if drive_link and st.button("Download from Drive"):
-    with st.spinner("Downloading..."):
-        tmp = tempfile.mktemp(suffix=".mp4")
-        if download_drive(drive_link, tmp):
-            st.session_state["video_path"] = tmp
-            st.session_state["clips"] = []
-            st.session_state["viral_done"] = False
-            st.success("Downloaded! Video is ready.")
-            st.rerun()
-        else:
-            st.error("Download failed. Set Drive to Anyone with link.")
-
-video_path = st.session_state.get("video_path")
-if uploaded:
-    tf = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-    tf.write(uploaded.read())
-    tf.close()
-    video_path = tf.name
-    st.session_state["video_path"] = video_path
-if video_path and os.path.exists(video_path):
-    f = open(video_path, "rb")
-    vb = f.read()
-    f.close()
-    st.video(vb)
-    mb = len(vb) // 1024 // 1024
-    st.caption("Video loaded: " + str(mb) + " MB")
-
-st.markdown(
-    '<div class="card"><h3>2. Clip Settings</h3></div>',
-    unsafe_allow_html=True
-)
-prompt = st.text_input(
-    "Prompt",
-    placeholder="Moment most likely to go viral"
-)
-clip_len = st.slider("Clip Length (seconds)", 15, 60, 30)
-st.caption("Normal Clip: 30 Sec - Best for Shorts / Reels")
-aspect = st.selectbox(
-    "Aspect Ratio",
-    ["9:16 - Shorts / Reels", "1:1 - Post", "16:9 - YouTube"]
-)
-num_clips = st.slider("Number of Clips", 1, 3, 1)
-captions = st.toggle("Auto Captions", value=True)
-if captions:
-    st.success("Subtitles ON - Video lo kanipisthayi")
-else:
-    st.warning("Subtitles OFF - Toggle ON cheyi, lekapothe subtitles ravu!")
-
-st.markdown(
-    '<div class="card"><h3>3. Captions - Position, Style & Colour</h3></div>',
-    unsafe_allow_html=True
-)
-caption_text = st.text_input("Caption Text", value="FOLLOW FOR MORE")
-st.caption("Whisper fail ayina kuda ee text subtitles la vasthadi - Guarantee")
-
-c1, c2 = st.columns(2)
-with c1:
-    font = st.selectbox(
-        "Caption Font Style",
-        [
-            "Poppins Bold - Clean",
-            "Montserrat Bold - YouTube",
-            "Bebas Neue - Viral Reels",
-            "Anton - Bold Movie",
-            "Oswald Bold - News",
-            "Impact - Meme Style"
-        ]
-    )
-with c2:
-    caption_color = st.selectbox(
-        "Caption Color",
-        list(CAPTION_COLOURS.keys())
-    )
-
-preview_hex = PREVIEW_COLOURS.get(caption_color, "#FFE600")
-st.markdown(
-    f'<div class="colour-preview" style="background:{preview_hex}; color:black;">{caption_text.upper()} - {caption_color}</div>',
-    unsafe_allow_html=True
-)
-st.caption("This is exactly how it will look in video - Same colour")
-
-c3, c4 = st.columns(2)
-with c3:
-    words_opt = st.selectbox(
-        "Words Per Line - Anti Cut",
-        [
-            "2 Words - Word Cut - Safest - Opus Style",
-            "3 Words - Balanced",
-            "4 Words - Long - May Cut on Phone"
-        ]
-    )
-    if "2 Words" in words_opt:
-        max_words = 2
-    elif "3 Words" in words_opt:
-        max_words = 3
-    else:
-        max_words = 4
-with c4:
-    font_style = st.selectbox(
-        "Subtitle Style",
-        [
-            "Bold + Black Box - Viral Reels",
-            "Bold + No Box - Clean",
-            "Outline Only - Gaming",
-            "Shadow - Cinematic"
-        ]
-    )
-
-c5, c6 = st.columns(2)
-with c5:
-    font_size = st.slider("Font Size", 14, 48, 22)
-    if font_size <= 26:
-        st.caption("Perfect - Will not cut off")
-    elif font_size <= 34:
-        st.caption("Large - Will show in 2 lines")
-    else:
-        st.caption("Very Large - May cut off")
-with c6:
-    outline_size = st.slider("Outline Thickness", 1, 5, 2)
-
-subtitle_position = st.selectbox(
-    "Caption Position - Safe Area",
-    [
-        "Bottom Center - Safe for Shorts - Above Buttons",
-        "Middle Center - Face Video",
-        "Top Center - Below Notch"
-    ]
-)
-st.caption("Bottom = 300px above bottom, so Like/Comment buttons do not hide text")
-
-st.markdown(
-    '<div class="card"><h3>4. Background Music</h3></div>',
-    unsafe_allow_html=True
-)
-music_option = st.selectbox(
-    "Choose Music",
-    ["No Music - Original Audio Only", "Upload My Own Music"]
-)
-if music_option != "No Music - Original Audio Only":
-    m1, m2 = st.columns(2)
-    with m1:
-        music_volume = st.slider("Music Volume", 0, 100, 20)
-        st.caption("Music: " + str(music_volume) + "%")
-    with m2:
-        fade_music = st.toggle("Fade In / Fade Out", value=True)
-else:
-    music_volume = 0
-    fade_music = False
-uploaded_music = None
-if music_option == "Upload My Own Music":
-    uploaded_music = st.file_uploader(
-        "Upload Your Song (MP3)",
-        type=["mp3", "wav", "m4a"]
-    )
-    if uploaded_music:
-        st.success("Music Uploaded: " + uploaded_music.name)
-        st.audio(uploaded_music)
-    else:
-        st.info("Upload an MP3 - Trending song / Gaming beat")
-
-st.markdown(
-    '<div class="card"><h3>5. Video Effect</h3></div>',
-    unsafe_allow_html=True
-)
-effect = st.selectbox(
-    "Choose Effect",
-    [
-        "No Effect - Original",
-        "Vibrant - Reels Pop",
-        "Cinematic - Movie Look",
-        "Black and White - Classic",
-        "Vintage - Old Film",
-        "Sharpen + HDR - Ultra Clear",
-        "Dark Mode - Night Gaming"
-    ]
-)
-
-if video_path and os.path.exists(video_path):
-    if st.button("Generate Viral Clips"):
-        duration = get_duration(video_path)
-        if duration == 0:
-            st.error("Could not read video. Re-upload.")
-        else:
-            uploaded_music_path = None
-            if uploaded_music:
-                tfm = tempfile.NamedTemporaryFile(
-                    delete=False, suffix=".mp3"
-                )
-                tfm.write(uploaded_music.read())
-                tfm.close()
-                uploaded_music_path = tfm.name
-            with st.spinner("Generating... Please wait - Subtitles burning..."):
-                st.session_state["clips"] = []
-                st.session_state["selected_clip"] = 0
-                for i in range(num_clips):
-                    start = (duration // (num_clips + 1)) * (i + 1)
-                    if start < 0:
-                        start = 0
-                    out = tempfile.mktemp(suffix="_clip.mp4")
-                    ok, sub_msg = make_clip(
-                        video_path, out, start,
-                        min(clip_len, duration - start),
-                        aspect, captions, caption_text,
-                        caption_color, font, font_size,
-                        font_style, subtitle_position,
-                        outline_size, music_option,
-                        music_volume, fade_music,
-                        uploaded_music_path, effect,
-                        max_words
-                    )
-                    if ok:
-                        f = open(out, "rb")
-                        cb = f.read()
-                        f.close()
-                        st.session_state["clips"].append(
-                            {"name": "Clip " + str(i + 1), "data": cb}
-                        )
-                        st.info("Subtitles: " + sub_msg)
-                    else:
-                        st.error("Failed to create Clip " + str(i + 1))
-                        st.error(sub_msg)
-                st.session_state["viral_done"] = True
-            st.balloons()
-            st.rerun()
-else:
-    st.info("Upload a video first to generate clips")
-
-if st.session_state["clips"]:
-    st.markdown(
-        '<div class="card"><h3>Your Clips Ready</h3></div>',
-        unsafe_allow_html=True
-    )
-    if st.session_state.get("sub_debug"):
-        st.caption("Debug: " + st.session_state["sub_debug"])
-    clip_names = []
-    for c in st.session_state["clips"]:
-        clip_names.append(c["name"])
-    selected = st.radio(
-        "Choose Clip to Play:",
-        clip_names,
-        index=st.session_state["selected_clip"],
-        horizontal=True
-    )
-    sel_idx = clip_names.index(selected)
-    st.session_state["selected_clip"] = sel_idx
-    c = st.session_state["clips"][sel_idx]
-    st.success(c["name"] + " Ready - 1080p HD + Subtitles Burned")
-    st.video(c["data"])
-    st.download_button(
-        "Download " + c["name"],
-        c["data"],
-        file_name="clipshort_clip.mp4",
-        mime="video/mp4"
-    )
-
-    if st.session_state["viral_done"]:
-        st.markdown(
-            '<div class="card"><h3>Viral Title and Description</h3></div>',
-            unsafe_allow_html=True
-        )
-        base_topic = prompt
-        if not base_topic:
-            base_topic = caption_text
-        if base_topic == "FOLLOW FOR MORE":
-            base_topic = "This Amazing Moment"
-        t1 = base_topic + " You Wont Believe This! #shorts"
-        t2 = "OMG! " + base_topic + " Viral Moment!"
-        t3 = base_topic + " - Watch Till End!"
-        titles = [t1, t2, t3]
-        st.write("Copy and paste into YouTube Title:")
-        selected_title = st.selectbox("Choose Best Title", titles)
-        st.text_input("Your Viral Title", value=selected_title)
-        desc = selected_title + "\n\n"
-        desc += base_topic + " - This is the most viral moment. "
-        desc += "Watch till end and comment your reaction.\n\n"
-        desc += "Follow ClipShort AI for more viral shorts!\n\n"
-        desc += "#shorts #viral #trending #youtubeshorts #reels #fyp"
-        st.write("Description - Copy All:")
-        st.text_area("Your Viral Description", value=desc, height=180)
-        htags = "#shorts #viral #trending #youtubeshorts #reels #fyp"
-        st.write("Hashtags:")
-        st.text_input("Hashtags", value=htags)
-        st.success("Title + Description Ready!")
-
-st.markdown(
-    '<p style="text-align:center;">Made by ClipShort AI - Free for Creators</p>',
-    unsafe_allow_html=True
-)
+if __name__=="__main__":
+    port=int(os.environ.get("PORT",5000))
+    app.run(host="0.0.0.0",port=port)
