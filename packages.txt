@@ -1,6 +1,1 @@
 ffmpeg
-fonts-montserrat
-fonts-poppins
-fonts-bebas-neue
-fonts-anton
-fonts-oswald
