@@ -9,19 +9,17 @@ st.markdown("""
 <style>
 .stApp { background: linear-gradient(180deg, #0f0c29 0%, #302b63 50%, #24243e 100%) !important; }
 h1, h2, h3, p, label { color: white !important; }
-
-/* INPUTS - CLEAR */
-.stTextInput input {
+.stTextInput input, .stTextArea textarea {
     background: white !important; color: black !important;
     -webkit-text-fill-color: black !important;
     border-radius: 12px !important; font-weight: 600 !important;
-    height: 48px !important; font-size: 15px !important;
+    font-size: 15px !important;
 }
-.stTextInput input::placeholder { color: #888 !important; -webkit-text-fill-color: #888 !important; }
+.stTextInput input { height: 48px !important; }
+.stTextInput input::placeholder, .stTextArea textarea::placeholder { color: #888 !important; -webkit-text-fill-color: #888 !important; }
 .stSelectbox div[data-baseweb="select"] div { background: white !important; color: black !important; border-radius: 12px !important; }
 div[data-baseweb="select"] span { color: black !important; font-weight: 600 !important; }
 div[data-baseweb="menu"] div { color: black !important; background: white !important; }
-
 .stButton button { background: linear-gradient(90deg, #FF512F, #DD2476) !important; color: white !important; border: none !important; border-radius: 50px !important; font-weight: 700 !important; width: 100% !important; height: 50px !important; font-size: 16px !important; }
 .stDownloadButton button { background: #00C853 !important; border-radius: 12px !important; height: 46px !important; }
 .card { background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.15); border-radius: 16px; padding: 16px; margin: 14px 0; }
@@ -84,29 +82,28 @@ def get_duration(path):
 
 def make_clip(input_path, output_path, start, duration, aspect, captions_on, caption_text, caption_color):
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    # 1080p BEST - LOCKED
     if "9:16" in aspect: vf = "crop=ih*9/16:ih,scale=1080:1920"
     elif "1:1" in aspect: vf = "crop=min(iw\\,ih):min(iw\\,ih),scale=1080:1080"
     else: vf = "scale=1920:1080"
     if captions_on:
-        safe_text = caption_text.replace("'", "").replace(":", "")
+        safe_text = caption_text.replace("'", "").replace(":", "").replace('"', "")[:30]
         color = "yellow" if caption_color == "Yellow" else "cyan" if caption_color == "Cyan" else "pink" if caption_color == "Pink" else "white"
-        vf += f",drawtext=text='{safe_text}':fontcolor={color}:fontsize=56:box=1:boxcolor=black@0.6:x=(w-text_w)/2:y=h-160"
-    cmd = [ffmpeg, "-y", "-ss", str(start), "-t", str(duration), "-i", input_path, "-vf", vf, "-c:a", "aac", output_path]
+        vf += f",drawtext=text='{safe_text}':fontcolor={color}:fontsize=64:box=1:boxcolor=black@0.7:borderw=2:x=(w-text_w)/2:y=h-220"
+    cmd = [ffmpeg, "-y", "-ss", str(start), "-t", str(duration), "-i", input_path, "-vf", vf, "-c:a", "aac", "-preset", "fast", "-crf", "23", output_path]
     subprocess.run(cmd, capture_output=True)
     return os.path.exists(output_path) and os.path.getsize(output_path) > 10000
 
-# --- HEADER - SIMPLE, NO GLITCH ---
-st.markdown('<div style="text-align:center; padding-top:10px;"><span class="badge">✨ 100% FREE • NO WATERMARK</span></div>', unsafe_allow_html=True)
+# --- HEADER ---
+st.markdown('<div style="text-align:center; padding-top:10px;"><span class="badge">✨ 100% FREE • NO WATERMARK • 1080p HD</span></div>', unsafe_allow_html=True)
 st.markdown('<h1 style="text-align:center; font-size:40px;">✂️ ClipShort AI</h1>', unsafe_allow_html=True)
 st.markdown('<p style="text-align:center; font-size:16px;">Turn Any Video Into Viral Shorts in 1 Click</p>', unsafe_allow_html=True)
-
 st.markdown('<div class="card"><b>📤 Upload - Up to 200MB</b><br><b>☁️ Drive - Up to 4GB</b><br><small>For YouTube: YouTube Studio > Download > Upload to Drive > Paste link here</small></div>', unsafe_allow_html=True)
 
 # --- STEP 1 ---
 st.markdown('<div class="card"><h3>1. Upload Your Video</h3></div>', unsafe_allow_html=True)
 uploaded = st.file_uploader("Choose a video file", type=["mp4","mov","mkv","webm"])
 drive_link = st.text_input("Paste Google Drive Link", placeholder="https://drive.google.com/file/d/... - Set to Anyone with link")
-
 if drive_link and st.button("Download from Drive"):
     with st.spinner("Downloading from Drive... Please wait"):
         tmp = tempfile.mktemp(suffix=".mp4")
@@ -116,7 +113,6 @@ if drive_link and st.button("Download from Drive"):
             st.rerun()
         else:
             st.error("Download failed. Drive > Share > Anyone with link chesi malli try cheyi.")
-
 yt_link = st.text_input("Or Paste YouTube Link - Info Only", placeholder="https://youtu.be/...")
 if st.button("Get Video Info"):
     st.warning("YouTube direct download is blocked. Please download from YouTube Studio and upload here.")
@@ -127,10 +123,8 @@ if uploaded:
         tf.write(uploaded.read())
         video_path = tf.name
         st.session_state["video_path"] = video_path
-
 if video_path and os.path.exists(video_path):
-    with open(video_path, "rb") as f:
-        video_bytes = f.read()
+    with open(video_path, "rb") as f: video_bytes = f.read()
     st.video(video_bytes)
     st.caption(f"Video loaded: {len(video_bytes)//1024//1024} MB")
 
@@ -139,6 +133,7 @@ st.markdown('<div class="card"><h3>2. Clip Settings</h3></div>', unsafe_allow_ht
 prompt = st.text_input("Prompt", placeholder="Moment most likely to go viral")
 clip_len = st.slider("Clip Length (seconds)", 15, 60, 30)
 aspect = st.selectbox("Aspect Ratio", ["9:16 - Shorts / Reels", "1:1 - Post", "16:9 - YouTube"])
+quality = st.selectbox("Video Quality", ["1080p - HD (Best for Shorts)", "720p - Fast (Testing Only)"])
 num_clips = st.slider("Number of Clips", 1, 3, 1)
 captions = st.toggle("Auto Captions", value=True)
 
@@ -155,19 +150,47 @@ if video_path and os.path.exists(video_path):
         if duration == 0:
             st.error("Could not read video. Re-upload.")
         else:
-            with st.spinner("Generating your clips... Please wait"):
+            with st.spinner("Generating your clips in 1080p... Please wait"):
                 for i in range(num_clips):
                     start = max(0, (duration // (num_clips + 1)) * (i + 1))
                     out = tempfile.mktemp(suffix=f"_clip{i+1}.mp4")
                     ok = make_clip(video_path, out, start, min(clip_len, duration - start), aspect, captions, caption_text, caption_color)
                     if ok:
-                        st.success(f"Clip {i+1} Ready!")
+                        st.success(f"Clip {i+1} Ready! - 1080p HD")
                         with open(out, "rb") as f: cb = f.read()
                         st.video(cb)
                         st.download_button(f"⬇️ Download Clip {i+1}", cb, file_name=f"clipshort_clip{i+1}.mp4", mime="video/mp4", key=f"dl{i}")
                     else:
                         st.error(f"Failed to create Clip {i+1}")
             st.balloons()
+
+            # --- AUTO VIRAL TITLE / DESCRIPTION ---
+            st.markdown('<div class="card"><h3>🚀 Viral Title & Description - Auto Generated</h3></div>', unsafe_allow_html=True)
+            base_topic = prompt if prompt else caption_text if caption_text else "This Video"
+            if base_topic == "FOLLOW FOR MORE":
+                base_topic = "This Amazing Moment"
+            titles = [
+                f"{base_topic} 😱 You Won't Believe This! #shorts",
+                f"OMG! {base_topic} 🔥 Viral Moment!",
+                f"{base_topic} - Watch Till End! 👀",
+            ]
+            st.write("**👇 Copy chesi YouTube Title lo paste cheyi:**")
+            selected_title = st.selectbox("Choose Best Title", titles)
+            st.text_input("Your Viral Title", value=selected_title)
+            desc = f"""{selected_title}
+
+{base_topic} - This is the most viral moment from this video! Watch till end and let me know your reaction in comments 👇
+
+🔥 Follow @ClipShort AI for more viral shorts!
+
+#shorts #viral #trending #youtubeshorts #reels #fyp #viralvideo #shortsfeed
+"""
+            st.write("**👇 Description - Copy All:**")
+            st.text_area("Your Viral Description", value=desc, height=180)
+            hashtags = "#shorts #viral #trending #youtubeshorts #reels #fyp #viralvideo #shortsfeed #clipshortai #foryou"
+            st.write("**👇 Hashtags:**")
+            st.text_input("Hashtags", value=hashtags)
+            st.success("✅ Title + Description Ready! Copy chesi YouTube / Instagram lo paste cheyi!")
 else:
     st.info("👆 Upload a video first to generate clips")
 
