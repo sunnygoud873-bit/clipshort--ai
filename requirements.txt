@@ -1,6 +1,6 @@
-flask
+Flask==3.0.3
 imageio-ffmpeg
 openai-whisper
-gdown
-yt-dlp
+gdown==5.2.0
+yt-dlp>=2025.1.1
 gunicorn
