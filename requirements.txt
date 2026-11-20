@@ -1,7 +1,9 @@
-streamlit==1.37.1
-requests
-gdown
+
+numpstreamlit
+moviepy==1.0.3
+numpy
+Pillow
+imageio
 imageio-ffmpeg
-openai-whisper==20231117
-yt-dlp
-numpy<2.0
+faster-whisper
+setuptools
