@@ -1,47 +1,26 @@
 import streamlit as st
-import requests
 import os
 import re
 import subprocess
 import tempfile
+import requests
 import imageio_ffmpeg
 
-st.set_page_config(page_title="ClipShort AI - Pro Editor", page_icon="✂️", layout="wide")
+st.set_page_config(page_title="ClipShort AI", page_icon="✂️", layout="wide")
 
-# ---------- THEMES ----------
-THEMES = {
-    "Dark Purple": {"bg": "#0f0c29", "card": "rgba(255,255,255,0.10)", "text": "#FFFFFF", "subtext": "#B0B0B0", "primary": "#DD2476", "primary2": "#FF512F", "success": "#00C853", "input_bg": "#FFFFFF", "input_text": "#000000"},
-    "Neon Black": {"bg": "#000000", "card": "rgba(0,255,136,0.08)", "text": "#FFFFFF", "subtext": "#00FF88", "primary": "#00FF88", "primary2": "#00D4FF", "success": "#00FF88", "input_bg": "#1A1A1A", "input_text": "#FFFFFF"},
-    "Clean White": {"bg": "#F5F5F5", "card": "#FFFFFF", "text": "#000000", "subtext": "#666666", "primary": "#6C5CE7", "primary2": "#A29BFE", "success": "#00B894", "input_bg": "#FFFFFF", "input_text": "#000000"},
-}
-CAPTION_COLOURS = {"Yellow": "&H00FFFF&", "White": "&HFFFFFF&", "Cyan": "&HFFFF00&", "Pink": "&HFF00FF&", "Green": "&H00FF00&", "Orange": "&H0080FF&", "Red": "&H0000FF&", "Custom": "CUSTOM"}
-PREVIEW_COLOURS = {"Yellow": "#FFE600", "White": "#FFFFFF", "Cyan": "#00E5FF", "Pink": "#FF00AA", "Green": "#00FF00", "Orange": "#FF8000", "Red": "#FF0000"}
-
-if "ui_theme" not in st.session_state:
-    st.session_state["ui_theme"] = "Dark Purple"
-theme_name = st.sidebar.selectbox("UI Theme", list(THEMES.keys()), index=list(THEMES.keys()).index(st.session_state["ui_theme"]))
-st.session_state["ui_theme"] = theme_name
-T = THEMES[theme_name]
-
-st.markdown(f"""
+st.markdown("""
 <style>
-.stApp {{ background: {T['bg']} !important; }}
-.main .block-container {{ max-width: 760px !important; padding: 12px 12px 80px 12px !important; margin: auto !important; }}
-h1, h2, h3, p, label, span {{ color: {T['text']} !important; }}
-.stCaption, small {{ color: {T['subtext']} !important; }}
-.stTextInput input, .stTextArea textarea {{ background: {T['input_bg']} !important; color: {T['input_text']} !important; border-radius: 12px !important; font-weight: 600 !important; border: 2px solid {T['primary']} !important; }}
-.stSelectbox > div > div {{ background: {T['input_bg']} !important; color: {T['input_text']} !important; border-radius: 12px !important; }}
-.stButton button {{ background: linear-gradient(90deg, {T['primary']}, {T['primary2']}) !important; color: white !important; border-radius: 50px !important; font-weight: 700 !important; width: 100% !important; height: 52px !important; border: none !important; }}
-.stDownloadButton button {{ background: {T['success']} !important; color: white !important; border-radius: 12px !important; width: 100% !important; border: none !important; }}
-.card {{ background: {T['card']}; border: 1px solid {T['primary']}; border-radius: 16px; padding: 14px; margin: 12px 0; }}
-.colour-preview {{ width: 100%; height: 60px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 800; margin: 8px 0; border: 2px solid white; }}
-video {{ border-radius: 16px !important; width: 100% !important; max-height: 560px !important; object-fit: contain !important; border: 2px solid {T['primary']} !important; }}
+.stApp { background: #0f0c29 !important; }
+h1,h2,h3,p,label,span { color: white !important; }
+.stButton button { background: linear-gradient(90deg,#DD2476,#FF512F) !important; color:white !important; border-radius:50px !important; height:52px !important; width:100% !important; font-weight:700 !important; border:none !important; }
+.stDownloadButton button { background:#00C853 !important; color:white !important; width:100% !important; border:none !important; border-radius:12px !important; }
+video { border-radius:16px !important; width:100% !important; border:2px solid #DD2476 !important; }
 </style>
 """, unsafe_allow_html=True)
 
-for k, v in [("video_path", None), ("clips", []), ("selected_clip", 0), ("viral_done", False), ("last_upload_name", None), ("whisper_model", None)]:
-    if k not in st.session_state:
-        st.session_state[k] = v
+if "video_path" not in st.session_state: st.session_state["video_path"] = None
+if "clips" not in st.session_state: st.session_state["clips"] = []
+if "last_name" not in st.session_state: st.session_state["last_name"] = None
 
 def get_drive_id(link):
     m = re.search(r"/d/([a-zA-Z0-9_-]+)", link)
@@ -50,271 +29,191 @@ def get_drive_id(link):
     if m: return m.group(1)
     return None
 
-def download_drive(link, out_path):
+def download_drive(link, out):
     fid = get_drive_id(link)
     if not fid: return False
     try:
         import gdown
-        gdown.download(f"https://drive.google.com/uc?id={fid}&export=download&confirm=t", out_path, quiet=False, fuzzy=True, use_cookies=False)
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 10000:
-            with open(out_path, "rb") as f:
-                if b"<html" not in f.read(30).lower(): return True
+        gdown.download(f"https://drive.google.com/uc?id={fid}", out, quiet=True, fuzzy=True)
+        if os.path.exists(out) and os.path.getsize(out) > 10000: return True
     except Exception: pass
-    try:
-        r = requests.get(f"https://drive.google.com/uc?export=download&id={fid}", stream=True, timeout=300)
-        if 'Content-Disposition' not in r.headers:
-            for k, v in r.cookies.items():
-                if k.startswith('download_warning'):
-                    r = requests.get(f"https://drive.google.com/uc?export=download&id={fid}&confirm={v}", stream=True, timeout=300); break
-        with open(out_path, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=1024*1024):
-                if chunk: f.write(chunk)
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 10000:
-            with open(out_path, "rb") as f:
-                if b"<html" not in f.read(30).lower(): return True
-    except Exception as e: st.error(f"Drive Error: {e}")
     return False
 
-def download_youtube(url, out_path):
+def download_yt(url, out):
     try:
         import yt_dlp
-        ydl_opts = {'format': 'mp4/best[ext=mp4]/best', 'outtmpl': out_path.replace(".mp4", ".%(ext)s"), 'quiet': True, 'no_warnings': True, 'merge_output_format': 'mp4'}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl: ydl.download([url])
-        if os.path.exists(out_path): return True
-        base = out_path.replace(".mp4", "")
-        for f in os.listdir(os.path.dirname(out_path) or "."):
+        opts = {'format': 'mp4/best[ext=mp4]/best', 'outtmpl': out.replace(".mp4", ".%(ext)s"), 'quiet': True, 'merge_output_format': 'mp4'}
+        with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
+        if os.path.exists(out): return True
+        base = out.replace(".mp4","")
+        for f in os.listdir(os.path.dirname(out) or "."):
             if f.startswith(os.path.basename(base)) and f.endswith(".mp4"):
-                os.rename(os.path.join(os.path.dirname(out_path) or ".", f), out_path); return True
+                os.rename(os.path.join(os.path.dirname(out) or ".", f), out); return True
         return False
-    except Exception as e: st.error(f"YouTube Error: {e}")
-    return False
+    except Exception as e:
+        st.error(f"YouTube Error: {e}"); return False
 
 def get_duration(path):
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    res = subprocess.run([ffmpeg, "-i", path], capture_output=True, text=True)
-    m = re.search(r"Duration: (\d+):(\d+):(\d+)", res.stderr)
+    r = subprocess.run([ffmpeg, "-i", path], capture_output=True, text=True)
+    m = re.search(r"Duration: (\d+):(\d+):(\d+)", r.stderr)
     if m: return int(m.group(1))*3600 + int(m.group(2))*60 + int(m.group(3))
-    return 0
+    return 120
 
-def fmt_ass_time(t):
-    h = int(t // 3600); m = int((t % 3600) // 60); s = int(t % 60); cs = int((t % 1) * 100)
+def fmt_time(t):
+    h=int(t//3600); m=int((t%3600)//60); s=int(t%60); cs=int((t%1)*100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
-def split_lines(txt, max_words):
-    words = txt.upper().split(); lines = []
+def write_ass(path, caption_text, duration, font_size, colour, max_words):
+    words = caption_text.upper().split()
+    lines=[]
     for j in range(0, len(words), max_words): lines.append(" ".join(words[j:j+max_words]))
-    return lines
-
-def hex_to_ass(hex_color):
-    hex_color = hex_color.lstrip("#")
-    r, g, b = hex_color[0:2], hex_color[2:4], hex_color[4:6]
-    return f"&H00{b}{g}{r}&".upper()
-
-def write_ass(ass_path, segments, font_name, font_size, colour, bstyle, outline, shadow, align, marg_v, bold, italic):
+    if not lines: lines=["FOLLOW FOR MORE"]
     header = "[Script Info]\nScriptType: v4.00+\nPlayResX: 1080\nPlayResY: 1920\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-    header += f"Style: Default,{font_name},{font_size},{colour},&HFFFFFF&,&H80000000&,&H80000000&,{-1 if bold else 0},{-1 if italic else 0},0,0,100,100,0,0,{bstyle},{outline},{shadow},{align},130,130,{marg_v},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-    body = ""
-    for (s, e, txt) in segments:
-        body += f"Dialogue: 0,{fmt_ass_time(s)},{fmt_ass_time(e)},Default,,0,0,0,,{txt.replace(',', ' ').replace(':', ' ')}\n"
-    open(ass_path, "w", encoding="utf-8").write(header + body)
+    header += f"Style: Default,Arial Black,{font_size},{colour},&HFFFFFF&,&H80000000&,&H80000000&,-1,0,0,0,100,100,0,0,3,2,1,2,130,130,300,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    body=""
+    chunk = max(3, duration / len(lines))
+    for i, ln in enumerate(lines):
+        s=i*chunk; e=min(duration, s+chunk)
+        body += f"Dialogue: 0,{fmt_time(s)},{fmt_time(e)},Default,,0,0,0,,{ln}\n"
+    open(path,"w",encoding="utf-8").write(header+body)
 
-def get_whisper_model():
-    if st.session_state["whisper_model"] is None:
-        try:
-            from faster_whisper import WhisperModel
-            st.session_state["whisper_model"] = WhisperModel("tiny", device="cpu", compute_type="int8")
-        except Exception:
-            st.session_state["whisper_model"] = False
-    return st.session_state["whisper_model"] if st.session_state["whisper_model"] else None
-
-def make_clip(input_path, output_path, start, duration, aspect, captions_on, caption_text, caption_color_ass, font_name_ff, font_size, font_style, subtitle_position, outline_size, marg_v_custom, bold, italic, music_path_input, music_volume, orig_volume, fade_music, music_start, edit):
+def make_clip(inp, out, start, duration, aspect, captions_on, caption_text, colour_ass, font_size, max_words, music_path, music_vol, orig_vol, brightness, contrast, saturation, speed):
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     tmpdir = tempfile.mkdtemp()
     ass_path = os.path.join(tmpdir, "subs.ass")
-    ass_esc = ass_path.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-    if "9:16" in aspect: base_crop = "crop=ih*9/16:ih,scale=1080:1920"
-    elif "1:1" in aspect: base_crop = "crop='min(iw,ih)':'min(iw,ih)',scale=1080:1080"
-    elif "4:5" in aspect: base_crop = "crop=ih*4/5:ih,scale=1080:1350"
-    else: base_crop = "scale=1920:1080"
-    eq = f",eq=brightness={edit['brightness']}:contrast={edit['contrast']}:saturation={edit['saturation']}"
-    if edit['sharpness'] > 0: eq += f",unsharp=5:5:{edit['sharpness']}:5:5:0.0"
-    if "Vibrant" in edit['preset']: eq += ",eq=contrast=1.15:saturation=1.4"
-    elif "Cinematic" in edit['preset']: eq += ",eq=contrast=1.2:brightness=-0.05:saturation=1.1"
-    elif "Black" in edit['preset']: eq += ",hue=s=0,eq=contrast=1.1"
-    elif "Vintage" in edit['preset']: eq += ",eq=contrast=1.1:brightness=0.03:saturation=0.8"
-    extra = ""
-    if edit['flip'] == "Horizontal": extra += ",hflip"
-    elif edit['flip'] == "Vertical": extra += ",vflip"
-    if edit['rotate'] == "90°": extra += ",transpose=1"
-    elif edit['rotate'] == "180°": extra += ",transpose=2,transpose=2"
-    elif edit['rotate'] == "270°": extra += ",transpose=2"
-    speed = edit['speed']
-    base_vf = base_crop + eq + extra
-    if speed != 1.0:
-        base_vf += f",setpts={1/speed}*PTS"
-    vf = base_vf
+    ass_esc = ass_path.replace("\\","/").replace(":","\\:").replace("'","\\'")
+    if "9:16" in aspect: crop="crop=ih*9/16:ih,scale=1080:1920"
+    elif "1:1" in aspect: crop="crop='min(iw,ih)':'min(iw,ih)',scale=1080:1080"
+    elif "4:5" in aspect: crop="crop=ih*4/5:ih,scale=1080:1350"
+    else: crop="scale=1920:1080"
+    vf = f"{crop},eq=brightness={brightness}:contrast={contrast}:saturation={saturation}"
+    if speed != 1.0: vf += f",setpts={1/speed}*PTS"
     if captions_on:
-        col = caption_color_ass
-        if "No Box" in font_style: bstyle, outl, shad = 1, outline_size, 0
-        elif "Outline Only" in font_style: bstyle, outl, shad = 1, outline_size + 1, 0
-        elif "Shadow" in font_style: bstyle, outl, shad = 1, 1, 2
-        else: bstyle, outl, shad = 3, outline_size, 1
-        if "Middle" in subtitle_position: align, marg = 5, 0
-        elif "Top" in subtitle_position: align, marg = 8, 140
-        elif "Custom" in subtitle_position: align, marg = 2, marg_v_custom
-        else: align, marg = 2, 300
-        if max_words_global <= 2: safe_size = font_size
-        elif max_words_global == 3: safe_size = min(font_size, 28)
-        else: safe_size = min(font_size, 24)
-        audio_path = os.path.join(tmpdir, "audio.wav")
-        subprocess.run([ffmpeg, "-y", "-ss", str(start), "-t", str(duration), "-i", input_path, "-vn", "-ac", "1", "-ar", "16000", audio_path], capture_output=True)
-        segments = []; whisper_ok = False; model = get_whisper_model()
-        if model is not None:
-            try:
-                segments_gen, info = model.transcribe(audio_path, beam_size=1)
-                for seg in segments_gen:
-                    txt = seg.text.strip()
-                    if not txt: continue
-                    lines = split_lines(txt, max_words_global)
-                    segments.append((seg.start, seg.end, "\\N".join(lines)))
-                if segments: whisper_ok = True
-            except Exception: whisper_ok = False
-        if not whisper_ok or not segments:
-            lines = split_lines(caption_text, max_words_global)
-            chunk = max(4, duration / max(1, len(lines)))
-            for i, ln in enumerate(lines):
-                s = i * chunk; e = min(duration, s + chunk)
-                if s < duration: segments.append((s, e, ln))
-            if not segments: segments.append((0, duration, "\\N".join(lines)))
-        write_ass(ass_path, segments, font_name_ff, safe_size, col, bstyle, outl, shad, align, marg, bold, italic)
-        vf = base_vf + ",subtitles='" + ass_esc + "'"
-    if music_path_input and os.path.exists(music_path_input):
-        mv = music_volume / 100.0
-        ov = orig_volume / 100.0
-        if fade_music:
-            af = f"[0:a]volume={ov},atempo={speed}[a0];[1:a]volume={mv},afade=t=in:st=0:d=1,afade=t=out:st={max(1,duration-1)}:d=1,atrim=start={music_start},asetpts=PTS-STARTPTS[a1];[a0][a1]amix=inputs=2:duration=first[aout]"
-            if speed == 1.0: af = af.replace(",atempo=1.0", "")
-        else:
-            af = f"[0:a]volume={ov}[a0];[1:a]volume={mv},atrim=start={music_start},asetpts=PTS-STARTPTS[a1];[a0][a1]amix=inputs=2:duration=first[aout]"
-        cmd = [ffmpeg, "-y", "-ss", str(start), "-t", str(duration), "-i", input_path, "-stream_loop", "-1", "-i", music_path_input, "-vf", vf, "-filter_complex", af, "-map", "0:v", "-map", "[aout]", "-c:v", "libx264", "-c:a", "aac", "-preset", "fast", "-crf", "23", "-shortest", output_path]
+        write_ass(ass_path, caption_text, duration, font_size, colour_ass, max_words)
+        vf += f",subtitles='{ass_esc}'"
+    if music_path and os.path.exists(music_path):
+        af = f"[0:a]volume={orig_vol/100.0}[a0];[1:a]volume={music_vol/100.0}[a1];[a0][a1]amix=inputs=2:duration=first[aout]"
+        cmd = [ffmpeg,"-y","-ss",str(start),"-t",str(duration),"-i",inp,"-stream_loop","-1","-i",music_path,"-vf",vf,"-filter_complex",af,"-map","0:v","-map","[aout]","-c:v","libx264","-c:a","aac","-preset","fast","-crf","23","-shortest",out]
     else:
-        if speed != 1.0 or orig_volume != 100:
-            af = f"[0:a]volume={orig_volume/100.0},atempo={speed}[aout]"
-            cmd = [ffmpeg, "-y", "-ss", str(start), "-t", str(duration), "-i", input_path, "-vf", vf, "-filter_complex", af, "-map", "0:v", "-map", "[aout]", "-c:v", "libx264", "-c:a", "aac", "-preset", "fast", "-crf", "23", output_path]
+        if speed != 1.0:
+            af = f"[0:a]volume={orig_vol/100.0},atempo={speed}[aout]"
+            cmd = [ffmpeg,"-y","-ss",str(start),"-t",str(duration),"-i",inp,"-vf",vf,"-filter_complex",af,"-map","0:v","-map","[aout]","-c:v","libx264","-c:a","aac","-preset","fast","-crf","23",out]
         else:
-            cmd = [ffmpeg, "-y", "-ss", str(start), "-t", str(duration), "-i", input_path, "-vf", vf, "-c:v", "libx264", "-c:a", "aac", "-preset", "fast", "-crf", "23", output_path]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if os.path.exists(output_path) and os.path.getsize(output_path) > 10000: return True
-    if result.stderr: st.error(result.stderr[-500:])
-    return False
-
-max_words_global = 2
+            cmd = [ffmpeg,"-y","-ss",str(start),"-t",str(duration),"-i",inp,"-vf",vf,"-c:v","libx264","-c:a","aac","-preset","fast","-crf","23",out]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return os.path.exists(out) and os.path.getsize(out) > 10000
 
 # ---------- UI ----------
-st.markdown('<h1 style="text-align:center;">ClipShort AI - Pro Editor</h1>', unsafe_allow_html=True)
-st.markdown('<p style="text-align:center;">Turn Any Video Into Viral Shorts - Full Editing</p>', unsafe_allow_html=True)
+st.markdown('<h1 style="text-align:center;">✂️ ClipShort AI - Pro Editor</h1>', unsafe_allow_html=True)
+st.markdown('<p style="text-align:center;">Turn Any Video Into Viral Shorts</p>', unsafe_allow_html=True)
 
-st.markdown('<div class="card"><h3>1. Upload Your Video - 4GB Support</h3></div>', unsafe_allow_html=True)
-tab1, tab2, tab3 = st.tabs(["📤 Upload - 4GB", "📺 YouTube Link", "📁 Google Drive Link"])
-with tab1:
-    uploaded = st.file_uploader("Choose a video file - Up to 4GB", type=["mp4", "mov", "mkv", "webm"], key="main_upload")
-    if uploaded and st.session_state["last_upload_name"] != uploaded.name + str(uploaded.size):
-        st.info(f"File: {uploaded.name} - {uploaded.size/(1024*1024):.1f} MB")
+st.markdown("### 1. Upload Video")
+t1,t2,t3 = st.tabs(["📤 Upload", "📺 YouTube", "📁 Drive"])
+with t1:
+    up = st.file_uploader("Choose video - Up to 4GB", type=["mp4","mov","mkv","webm"])
+    if up and st.session_state["last_name"] != up.name + str(up.size):
         tf = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        with st.spinner("Saving..."):
-            for chunk in uploaded: tf.write(chunk)
+        for chunk in up: tf.write(chunk)
         tf.close()
-        st.session_state["video_path"] = tf.name
-        st.session_state["last_upload_name"] = uploaded.name + str(uploaded.size)
-        st.session_state["clips"] = []; st.session_state["viral_done"] = False
-        st.success("✅ Upload Successful!"); st.rerun()
-with tab2:
-    youtube_link = st.text_input("Paste YouTube Link", placeholder="https://youtube.com/watch?v=...", key="yt_link")
-    if youtube_link and st.button("Download from YouTube", key="yt_btn"):
-        with st.spinner("Downloading from YouTube..."):
-            tmp = tempfile.mktemp(suffix=".mp4")
-            if download_youtube(youtube_link, tmp):
-                st.session_state["video_path"] = tmp; st.session_state["clips"] = []; st.session_state["viral_done"] = False
-                st.success("✅ YouTube Downloaded!"); st.rerun()
-            else: st.error("YouTube Download Failed!")
-with tab3:
-    drive_link = st.text_input("Paste Google Drive Link", placeholder="https://drive.google.com/file/d/...", key="drive_link")
-    if drive_link and st.button("Download from Drive", key="drive_btn"):
-        with st.spinner("Downloading from Drive..."):
-            tmp = tempfile.mktemp(suffix=".mp4")
-            if download_drive(drive_link, tmp):
-                st.session_state["video_path"] = tmp; st.session_state["clips"] = []; st.session_state["viral_done"] = False
-                st.success("✅ Drive Downloaded!"); st.rerun()
-            else: st.error("❌ Drive Failed. Please set Share -> Anyone with the link -> Viewer")
+        st.session_state["video_path"]=tf.name
+        st.session_state["last_name"]=up.name+str(up.size)
+        st.session_state["clips"]=[]
+        st.success("✅ Uploaded!"); st.rerun()
+with t2:
+    yt = st.text_input("YouTube Link", placeholder="https://youtube.com/watch?v=...")
+    if yt and st.button("Download YouTube"):
+        tmp = tempfile.mktemp(suffix=".mp4")
+        if download_yt(yt, tmp):
+            st.session_state["video_path"]=tmp; st.session_state["clips"]=[]; st.success("✅ Downloaded!"); st.rerun()
+        else: st.error("YouTube Failed!")
+with t3:
+    dr = st.text_input("Google Drive Link", placeholder="https://drive.google.com/file/d/...")
+    if dr and st.button("Download Drive"):
+        tmp = tempfile.mktemp(suffix=".mp4")
+        if download_drive(dr, tmp):
+            st.session_state["video_path"]=tmp; st.session_state["clips"]=[]; st.success("✅ Downloaded!"); st.rerun()
+        else: st.error("Drive Failed - Share -> Anyone with link -> Viewer")
 
-video_path = st.session_state.get("video_path")
+video_path = st.session_state["video_path"]
 if video_path and os.path.exists(video_path):
     st.video(video_path)
     st.caption(f"Loaded: {os.path.getsize(video_path)/(1024*1024):.1f} MB")
 
-# ---------- 2. CLIP SETTINGS ----------
-st.markdown('<div class="card"><h3>2. Clip Settings - 1 to 30 Clips</h3></div>', unsafe_allow_html=True)
-prompt = st.text_input("Prompt", placeholder="Moment most likely to go viral")
-c_clip1, c_clip2 = st.columns(2)
-with c_clip1:
+st.markdown("### 2. Clip Settings")
+c1,c2 = st.columns(2)
+with c1:
     clip_len = st.slider("Clip Length (seconds)", 5, 90, 30)
-    aspect = st.selectbox("Aspect Ratio", ["9:16 - Shorts / Reels", "1:1 - Post", "4:5 - Instagram Post", "16:9 - YouTube"])
-with c_clip2:
-    num_clips = st.slider("Number of Clips - 1 to 30", 1, 30, 1)
+    aspect = st.selectbox("Aspect Ratio", ["9:16 - Shorts / Reels","1:1 - Post","4:5 - Instagram Post","16:9 - YouTube"])
+with c2:
+    num_clips = st.slider("Number of Clips", 1, 30, 1)
     captions = st.toggle("Auto Captions", value=True)
-    auto_mode = st.selectbox("Clip Pick Mode", ["Auto - Equal Split - Full Video", "Start to End - First Part Only"])
+    mode = st.selectbox("Clip Pick Mode", ["Auto - Equal Split - Full Video","Start to End - First Part Only"])
 
-st.markdown("**✂️ Trim Video - Start / End**")
-trim_start = st.slider("Trim Start (seconds) - Where should the video start?", 0, 600, 0)
-trim_end = st.slider("Trim End (seconds) - 0 = Full Video", 0, 600, 0)
-if trim_end > 0 and trim_end <= trim_start:
-    st.warning("Trim End must be greater than Trim Start!")
+trim_start = st.slider("Trim Start (sec)", 0, 600, 0)
+trim_end = st.slider("Trim End (sec) - 0 = Full Video", 0, 600, 0)
 
-# ---------- 3. FONT ----------
-st.markdown('<div class="card"><h3>3. Font Change + Size - Full Control</h3></div>', unsafe_allow_html=True)
+st.markdown("### 3. Captions + Font")
 caption_text = st.text_input("Caption Text", value="FOLLOW FOR MORE")
-f1, f2 = st.columns(2)
+f1,f2,f3 = st.columns(3)
 with f1:
-    font_choice = st.selectbox("✍️ Font Change - Choose Font", ["Poppins Bold - Clean", "Montserrat Bold - YouTube", "Bebas Neue - Viral Reels", "Anton - Bold Movie", "Oswald Bold - News", "Impact - Meme Style", "Arial Black - Simple", "Arial Narrow - Compact", "Verdana Bold - Clear", "Georgia Bold - Premium"])
-    FONT_MAP = {"Poppins Bold - Clean": "Arial Black", "Montserrat Bold - YouTube": "Arial Black", "Bebas Neue - Viral Reels": "Arial Narrow", "Anton - Bold Movie": "Impact", "Oswald Bold - News": "Arial Narrow", "Impact - Meme Style": "Impact", "Arial Black - Simple": "Arial Black", "Arial Narrow - Compact": "Arial Narrow", "Verdana Bold - Clear": "Verdana", "Georgia Bold - Premium": "Georgia"}
-    font_name_ff = FONT_MAP[font_choice]
+    col_name = st.selectbox("Caption Color", ["Yellow","White","Cyan","Pink","Green","Orange"])
+    COL_MAP = {"Yellow":"&H00FFFF&","White":"&HFFFFFF&","Cyan":"&HFFFF00&","Pink":"&HFF00FF&","Green":"&H00FF00&","Orange":"&H0080FF&"}
+    colour_ass = COL_MAP[col_name]
 with f2:
-    caption_color_name = st.selectbox("Caption Color", list(CAPTION_COLOURS.keys()) + ["Custom - Color Picker"])
-    if "Custom" in caption_color_name:
-        custom_hex = st.color_picker("Pick Any Color", "#FFE600")
-        caption_color_ass = hex_to_ass(custom_hex)
-        preview_hex = custom_hex
-    else:
-        caption_color_ass = CAPTION_COLOURS[caption_color_name]
-        preview_hex = PREVIEW_COLOURS.get(caption_color_name, "#FFE600")
-
-f3, f4, f5 = st.columns(3)
+    font_size = st.slider("Font Size", 10, 80, 28)
 with f3:
-    font_size = st.slider("🔠 Font Size", 10, 80, 22)
-with f4:
-    bold = st.toggle("Bold", value=True)
-    italic = st.toggle("Italic", value=False)
-with f5:
-    outline_size = st.slider("Outline Thickness", 0, 8, 2)
-    shadow_size = st.slider("Shadow", 0, 5, 1)
+    words_opt = st.selectbox("Words Per Line", ["2 Words - Best","3 Words","1 Word","4 Words"])
+    max_words = 2 if "2 Words" in words_opt else 3 if "3 Words" in words_opt else 1 if "1 Word" in words_opt else 4
 
-st.markdown(f'<div class="colour-preview" style="background:{preview_hex}; color:black; font-size:{min(font_size,32)}px;">{caption_text.upper()} - {font_choice}</div>', unsafe_allow_html=True)
+st.markdown("### 4. Editing")
+e1,e2,e3,e4 = st.columns(4)
+with e1: brightness = st.slider("Brightness", -0.3, 0.3, 0.0, step=0.01)
+with e2: contrast = st.slider("Contrast", 0.5, 2.0, 1.0, step=0.05)
+with e3: saturation = st.slider("Saturation", 0.0, 2.5, 1.0, step=0.05)
+with e4: speed = st.slider("Speed", 0.5, 2.0, 1.0, step=0.25)
 
-f6, f7 = st.columns(2)
-with f6:
-    words_opt = st.selectbox("Words Per Line", ["2 Words - Word Cut - Safest - Opus Style", "3 Words - Balanced", "4 Words - Long", "1 Word - Karaoke Style", "5 Words - Full Sentence"])
-    if "1 Word" in words_opt: max_words_global = 1
-    elif "2 Words" in words_opt: max_words_global = 2
-    elif "3 Words" in words_opt: max_words_global = 3
-    elif "4 Words" in words_opt: max_words_global = 4
-    else: max_words_global = 5
-with f7:
-    font_style = st.selectbox("Caption Style", ["Box - Opus Style", "Outline Only", "Shadow", "No Box"])
-    subtitle_position = st.selectbox("Caption Position", ["Bottom - Default", "Middle", "Top", "Custom"])
-    marg_v_custom = st.slider("Custom Margin Bottom", 0, 800, 300)
+st.markdown("### 5. Music")
+music_file = st.file_uploader("Upload Music (MP3)", type=["mp3","wav","m4a"])
+music_path = None
+if music_file:
+    mf = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    mf.write(music_file.read()); mf.close(); music_path=mf.name
+    st.success(f"Music: {music_file.name}")
+m1,m2 = st.columns(2)
+with m1: music_vol = st.slider("Music Volume %", 0, 100, 20)
+with m2: orig_vol = st.slider("Original Volume %", 0, 100, 100)
 
-# ---------- 4. EDITING ----------
-st.markdown('<div class="card"><h3>4. Video Editing - Pro</h3></div>', unsafe_allow_html=True)
-e1, e2, e3 = st.columns(3)
-with e1:
-    brightness = st.slider("Brightness", -0.3, 0.3, 0.0
+st.markdown("### 6. Generate")
+if st.button("🔥 GENERATE VIRAL CLIPS - START"):
+    if not video_path or not os.path.exists(video_path):
+        st.error("❌ Upload Video First!")
+    else:
+        total = get_duration(video_path)
+        eff_start = trim_start
+        eff_end = trim_end if trim_end>0 else total
+        if eff_end <= eff_start: eff_end = total
+        avail = eff_end - eff_start
+        if "First Part" in mode:
+            starts = [eff_start + i*clip_len for i in range(num_clips)]
+        else:
+            step = max(clip_len, avail/max(1,num_clips))
+            starts = [eff_start + i*step for i in range(num_clips)]
+        clips=[]; bar=st.progress(0)
+        for i,s in enumerate(starts):
+            if s+clip_len > eff_end: s=max(eff_start, eff_end-clip_len)
+            out=tempfile.mktemp(suffix=f"_clip{i+1}.mp4")
+            with st.spinner(f"Making Clip {i+1}/{num_clips}..."):
+                ok=make_clip(video_path,out,s,clip_len,aspect,captions,caption_text,colour_ass,font_size,max_words,music_path,music_vol,orig_vol,brightness,contrast,saturation,speed)
+            if ok: clips.append(out)
+            bar.progress((i+1)/num_clips)
+        st.session_state["clips"]=clips
+        st.success(f"✅ {len(clips)} Clips Ready!"); st.rerun()
+
+if st.session_state["clips"]:
+    st.markdown(f"### 🎬 {len(st.session_state['clips'])} Clips Ready!")
+    for i, cp in enumerate(st.session_state["clips"]):
+        st.markdown(f"**Clip {i+1}**")
+        st.video(cp)
+        with open(cp,"rb") as f:
+            st.download_button(f"⬇️ Download Clip {i+1}", data=f.read(), file_name=f"clip_{i+1}.mp4", mime="video/mp4", key=f"dl{i}")
