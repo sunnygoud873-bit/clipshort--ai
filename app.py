@@ -1,33 +1,53 @@
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import zipfile
+import logging
+
 from pathlib import Path
 from urllib.parse import urlparse
 
 import gdown
 import yt_dlp
-from flask import Flask, request, render_template, send_file, jsonify
-from faster_whisper import WhisperModel
-from werkzeug.utils import secure_filename
 
-# --------------------------------------------------
-# APP CONFIGURATION
-# --------------------------------------------------
+from flask import (
+    Flask, request, render_template,
+    send_file, jsonify
+)
+from werkzeug.utils import secure_filename
+from faster_whisper import WhisperModel
+
+
+# ==================================================
+# CONFIGURATION
+# ==================================================
 
 app = Flask(__name__, template_folder=".")
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024 * 1024
+
+logging.basicConfig(level=logging.INFO)
 
 JOBS = Path("/tmp/clipshort_jobs")
 JOBS.mkdir(parents=True, exist_ok=True)
 
 MODEL_NAME = os.getenv("WHISPER_MODEL", "tiny")
+YOUTUBE_COOKIES = os.getenv(
+    "YOUTUBE_COOKIES_FILE",
+    "/etc/secrets/youtube_cookies.txt"
+)
+
 whisper_model = None
 
-VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
-AUDIO_EXT = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+VIDEO_EXT = {
+    ".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"
+}
+
+AUDIO_EXT = {
+    ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"
+}
 
 FONTS = {
     "Arial", "DejaVu Sans", "Liberation Sans",
@@ -35,13 +55,13 @@ FONTS = {
 }
 
 
-# --------------------------------------------------
+# ==================================================
 # SYSTEM HELPERS
-# --------------------------------------------------
+# ==================================================
 
-def run_command(args):
+def run_command(command):
     result = subprocess.run(
-        args,
+        command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
@@ -49,7 +69,7 @@ def run_command(args):
 
     if result.returncode != 0:
         raise RuntimeError(
-            (result.stderr or result.stdout)[-2500:]
+            (result.stderr or result.stdout)[-3000:]
         )
 
     return result.stdout.strip()
@@ -69,19 +89,37 @@ def get_whisper():
 
 
 def get_duration(video):
-    value = run_command([
-        "ffprobe", "-v", "error",
+    result = run_command([
+        "ffprobe",
+        "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         str(video)
     ])
 
-    return float(value or 0)
+    return float(result or 0)
 
 
-# --------------------------------------------------
+def has_audio(video):
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "csv=p=0",
+            str(video)
+        ],
+        capture_output=True,
+        text=True
+    )
+
+    return bool(result.stdout.strip())
+
+
+# ==================================================
 # VIDEO IMPORT
-# --------------------------------------------------
+# ==================================================
 
 def download_video(upload, url, folder):
 
@@ -95,16 +133,19 @@ def download_video(upload, url, folder):
             raise ValueError("Unsupported video format.")
 
         destination = folder / ("source" + ext)
-
         upload.save(destination)
+
+        if not destination.exists() or destination.stat().st_size == 0:
+            raise RuntimeError("Uploaded video is empty.")
 
         return destination
 
     if not url:
-        raise ValueError("Upload a video or enter a video URL.")
+        raise ValueError(
+            "Upload a video or enter a video URL."
+        )
 
     parsed = urlparse(url)
-
     host = (parsed.hostname or "").lower()
 
     if parsed.scheme not in {"http", "https"}:
@@ -120,9 +161,11 @@ def download_video(upload, url, folder):
 
     drive_hosts = {
         "drive.google.com",
+        "www.drive.google.com",
         "docs.google.com"
     }
 
+    # YOUTUBE
     if host in youtube_hosts:
 
         options = {
@@ -130,14 +173,25 @@ def download_video(upload, url, folder):
             "outtmpl": str(folder / "source.%(ext)s"),
             "noplaylist": True,
             "quiet": True,
-            "no_warnings": True,
+            "no_warnings": False,
             "merge_output_format": "mp4",
-            "socket_timeout": 30,
-            "retries": 2
+            "socket_timeout": 45,
+            "retries": 3,
+            "extractor_retries": 3,
+            "fragment_retries": 3
         }
 
-        with yt_dlp.YoutubeDL(options) as downloader:
-            downloader.download([url])
+        if os.path.isfile(YOUTUBE_COOKIES):
+            options["cookiefile"] = YOUTUBE_COOKIES
+
+        try:
+            with yt_dlp.YoutubeDL(options) as downloader:
+                downloader.download([url])
+
+        except Exception as error:
+            raise RuntimeError(
+                f"YouTube download failed: {error}"
+            ) from error
 
         files = [
             p for p in folder.glob("source.*")
@@ -146,18 +200,29 @@ def download_video(upload, url, folder):
         ]
 
         if not files:
-            raise RuntimeError("YouTube video download failed.")
+            raise RuntimeError(
+                "YouTube did not provide a video. "
+                "Check your cookies or upload the video directly."
+            )
 
         return files[0]
 
+    # GOOGLE DRIVE
     if host in drive_hosts:
 
-        result = gdown.download(
-            url,
-            str(folder / "source"),
-            quiet=True,
-            fuzzy=True
-        )
+        destination = folder / "source"
+
+        try:
+            result = gdown.download(
+                url=url,
+                output=str(destination),
+                quiet=True
+            )
+
+        except Exception as error:
+            raise RuntimeError(
+                f"Google Drive download failed: {error}"
+            ) from error
 
         if not result:
             raise RuntimeError(
@@ -165,16 +230,23 @@ def download_video(upload, url, folder):
                 "Set sharing to Anyone with the link."
             )
 
-        return Path(result)
+        downloaded = Path(result)
+
+        if not downloaded.exists() or downloaded.stat().st_size == 0:
+            raise RuntimeError(
+                "Google Drive returned an empty file."
+            )
+
+        return downloaded
 
     raise ValueError(
-        "Use YouTube, public Google Drive, or upload a video."
+        "Use YouTube, Google Drive, or upload a video."
     )
 
 
-# --------------------------------------------------
+# ==================================================
 # BACKGROUND MUSIC
-# --------------------------------------------------
+# ==================================================
 
 def get_music(upload, folder):
 
@@ -189,15 +261,17 @@ def get_music(upload, folder):
         raise ValueError("Unsupported music format.")
 
     destination = folder / ("music" + ext)
-
     upload.save(destination)
+
+    if not destination.exists() or destination.stat().st_size == 0:
+        raise ValueError("Music file is empty.")
 
     return destination
 
 
-# --------------------------------------------------
+# ==================================================
 # AUTOMATIC SUBTITLES
-# --------------------------------------------------
+# ==================================================
 
 def transcribe(video):
 
@@ -206,22 +280,21 @@ def transcribe(video):
         vad_filter=True
     )
 
-    result = []
+    results = []
 
     for segment in segments:
-
-        result.append({
+        results.append({
             "start": float(segment.start),
             "end": float(segment.end),
             "text": segment.text.strip()
         })
 
-    return result
+    return results
 
 
-# --------------------------------------------------
+# ==================================================
 # CAPTION SETTINGS
-# --------------------------------------------------
+# ==================================================
 
 def ass_color(value, default):
 
@@ -240,15 +313,15 @@ def ass_color(value, default):
 
 def ass_time(seconds):
 
-    centiseconds = max(0, int(seconds * 100))
+    cs = max(0, int(seconds * 100))
 
-    hours, remaining = divmod(centiseconds, 360000)
+    hours, remaining = divmod(cs, 360000)
     minutes, remaining = divmod(remaining, 6000)
-    seconds, centiseconds = divmod(remaining, 100)
+    seconds, cs = divmod(remaining, 100)
 
     return (
         f"{hours}:{minutes:02}:"
-        f"{seconds:02}.{centiseconds:02}"
+        f"{seconds:02}.{cs:02}"
     )
 
 
@@ -265,10 +338,7 @@ def create_subtitles(
     if font not in FONTS:
         font = "Arial"
 
-    font_size = max(
-        16,
-        min(90, settings["font_size"])
-    )
+    font_size = max(16, min(90, settings["font_size"]))
 
     alignment = {
         "bottom": 2,
@@ -277,7 +347,6 @@ def create_subtitles(
     }.get(settings["position"], 2)
 
     margin = 90 if alignment != 5 else 0
-
     bold = -1 if settings["bold"] else 0
 
     lines = [
@@ -327,7 +396,6 @@ def create_subtitles(
         )
 
         if text:
-
             lines.append(
                 f"Dialogue: 0,"
                 f"{ass_time(start - clip_start)},"
@@ -343,9 +411,9 @@ def create_subtitles(
     return filename
 
 
-# --------------------------------------------------
+# ==================================================
 # AI CLIP SELECTION
-# --------------------------------------------------
+# ==================================================
 
 def choose_clips(
     segments,
@@ -354,15 +422,10 @@ def choose_clips(
     clip_length
 ):
 
-    clip_length = min(
-        clip_length,
-        total_duration
-    )
-
+    clip_length = min(clip_length, total_duration)
     step = max(1, clip_length // 3)
 
     candidates = []
-
     position = 0
 
     while position < total_duration:
@@ -372,19 +435,16 @@ def choose_clips(
             position + clip_length
         )
 
-        speech_score = sum(
+        score = sum(
             max(
                 0,
-                min(s["end"], end)
-                - max(s["start"], position)
+                min(s["end"], end) -
+                max(s["start"], position)
             )
             for s in segments
         )
 
-        candidates.append(
-            (speech_score, position)
-        )
-
+        candidates.append((score, position))
         position += step
 
     candidates.sort(
@@ -400,7 +460,6 @@ def choose_clips(
             abs(position - old) >= clip_length * 0.7
             for old in selected
         ):
-
             selected.append(position)
 
         if len(selected) >= clip_count:
@@ -409,9 +468,9 @@ def choose_clips(
     return sorted(selected or [0])
 
 
-# --------------------------------------------------
+# ==================================================
 # VIDEO EXPORT
-# --------------------------------------------------
+# ==================================================
 
 def create_clip(
     source,
@@ -450,12 +509,16 @@ def create_clip(
 
         filters += f",ass='{subtitle_path}'"
 
+    source_has_audio = has_audio(source)
+
     command = [
-        "ffmpeg", "-y",
+        "ffmpeg",
+        "-y",
         "-ss", str(start),
         "-i", str(source)
     ]
 
+    # MUSIC MIX
     if music:
 
         command += [
@@ -463,12 +526,26 @@ def create_clip(
             "-i", str(music)
         ]
 
-        audio_filter = (
-            f"[0:a]volume={settings['original_volume']/100}[a0];"
-            f"[1:a]volume={settings['music_volume']/100}[a1];"
-            "[a0][a1]amix=inputs=2:"
-            "duration=first:dropout_transition=2[a]"
-        )
+        if source_has_audio:
+
+            audio_filter = (
+                f"[0:a]volume="
+                f"{settings['original_volume']/100}[a0];"
+
+                f"[1:a]volume="
+                f"{settings['music_volume']/100}[a1];"
+
+                "[a0][a1]amix=inputs=2:"
+                "duration=first:"
+                "dropout_transition=2[a]"
+            )
+
+        else:
+
+            audio_filter = (
+                f"[1:a]volume="
+                f"{settings['music_volume']/100}[a]"
+            )
 
         command += [
             "-t", str(length),
@@ -478,22 +555,25 @@ def create_clip(
             "-map", "[a]"
         ]
 
+    # ORIGINAL AUDIO ONLY
     else:
 
         command += [
             "-t", str(length),
             "-vf", filters,
-            "-map", "0:v:0",
-            "-map", "0:a?"
+            "-map", "0:v:0"
         ]
 
-        if settings["original_volume"] == 0:
-            command += ["-an"]
-        else:
+        if source_has_audio and settings["original_volume"] > 0:
+
             command += [
+                "-map", "0:a:0",
                 "-af",
                 f"volume={settings['original_volume']/100}"
             ]
+
+        else:
+            command += ["-an"]
 
     command += [
         "-c:v", "libx264",
@@ -507,90 +587,105 @@ def create_clip(
 
     run_command(command)
 
+    if not output.exists() or output.stat().st_size == 0:
+        raise RuntimeError("FFmpeg did not create the output clip.")
+
     if subtitle_file.exists():
         subtitle_file.unlink()
 
 
-# --------------------------------------------------
+# ==================================================
+# FORM SETTINGS
+# ==================================================
+
+def bounded_setting(name, default, minimum, maximum):
+
+    try:
+        value = int(request.form.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+
+    return max(minimum, min(maximum, value))
+
+
+def get_settings():
+
+    return {
+        "subtitles": request.form.get("subtitles") == "on",
+        "font": request.form.get("font", "Arial"),
+
+        "font_size": bounded_setting(
+            "font_size", 42, 16, 90
+        ),
+
+        "font_color": request.form.get(
+            "font_color", "#FFFFFF"
+        ),
+
+        "outline_color": request.form.get(
+            "outline_color", "#000000"
+        ),
+
+        "outline": bounded_setting(
+            "outline", 3, 0, 8
+        ),
+
+        "position": request.form.get(
+            "position", "bottom"
+        ),
+
+        "bold": request.form.get("bold") == "on",
+
+        "uppercase": request.form.get("uppercase") == "on",
+
+        "music_volume": bounded_setting(
+            "music_volume", 25, 0, 100
+        ),
+
+        "original_volume": bounded_setting(
+            "original_volume", 100, 0, 100
+        )
+    }
+
+
+# ==================================================
 # WEBSITE
-# --------------------------------------------------
+# ==================================================
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", error=None)
 
 
 @app.get("/health")
 def health():
-    return jsonify(status="ok")
+
+    return jsonify({
+        "status": "ok",
+        "app": "CLIPSHORT AI"
+    })
 
 
-# --------------------------------------------------
+# ==================================================
 # GENERATE CLIPS
-# --------------------------------------------------
+# ==================================================
 
 @app.post("/generate")
 def generate():
 
+    folder = None
+
     try:
 
-        clip_count = max(
-            1,
-            min(30, int(request.form.get("clip_count", 5)))
+        clip_count = bounded_setting(
+            "clip_count", 5, 1, 30
         )
 
-        clip_length = max(
-            5,
-            min(90, int(request.form.get("clip_length", 30)))
+        clip_length = bounded_setting(
+            "clip_length", 30, 5, 90
         )
 
-        settings = {
-
-            "subtitles":
-                request.form.get("subtitles") == "on",
-
-            "font":
-                request.form.get("font", "Arial"),
-
-            "font_size":
-                max(16, min(
-                    90,
-                    int(request.form.get("font_size", 42))
-                )),
-
-            "font_color":
-                request.form.get("font_color", "#FFFFFF"),
-
-            "outline_color":
-                request.form.get("outline_color", "#000000"),
-
-            "outline":
-                max(0, min(
-                    8,
-                    int(request.form.get("outline", 3))
-                )),
-
-            "position":
-                request.form.get("position", "bottom"),
-
-            "bold":
-                request.form.get("bold") == "on",
-
-            "uppercase":
-                request.form.get("uppercase") == "on",
-
-            "music_volume":
-                max(0, min(
-                    100,
-                    int(request.form.get("music_volume", 25))
-                )),
-
-            "original_volume":
-                max(0, min(
-                    100,
-                    int(request.form.get("original_volume", 100))
-                ))
-        }
+        settings = get_settings()
 
         folder = Path(
             tempfile.mkdtemp(
@@ -599,17 +694,20 @@ def generate():
             )
         )
 
+        # IMPORT VIDEO
         source = download_video(
             request.files.get("video"),
             request.form.get("source_url", "").strip(),
             folder
         )
 
+        # IMPORT MUSIC
         music = get_music(
             request.files.get("music"),
             folder
         )
 
+        # CHECK VIDEO
         total = get_duration(source)
 
         if total < 5:
@@ -622,9 +720,10 @@ def generate():
             int(total)
         )
 
-        # Speech transcription is used for clip scoring.
+        # TRANSCRIPTION
         segments = transcribe(source)
 
+        # SELECT CLIPS
         positions = choose_clips(
             segments,
             total,
@@ -634,6 +733,7 @@ def generate():
 
         outputs = []
 
+        # GENERATE EACH CLIP
         for index, position in enumerate(
             positions,
             start=1
@@ -641,11 +741,16 @@ def generate():
 
             output = folder / f"clip_{index:02}.mp4"
 
+            duration = min(
+                clip_length,
+                total - position
+            )
+
             create_clip(
                 source,
                 output,
                 position,
-                min(clip_length, total - position),
+                duration,
                 segments,
                 settings,
                 music
@@ -653,6 +758,10 @@ def generate():
 
             outputs.append(output)
 
+        if not outputs:
+            raise RuntimeError("No clips were generated.")
+
+        # CREATE ZIP
         archive = folder / "clipshort_exports.zip"
 
         with zipfile.ZipFile(
@@ -670,24 +779,27 @@ def generate():
         return send_file(
             archive,
             as_attachment=True,
-            download_name="clipshort_ai_clips.zip"
+            download_name="clipshort_ai_clips.zip",
+            mimetype="application/zip"
         )
 
     except Exception as error:
 
         app.logger.exception(
-            "Clip generation failed"
+            "CLIPSHORT AI generation failed"
         )
 
-        return (
-            f"Clip generation error: {error}",
-            400
-        )
+        message = f"Clip generation error: {error}"
+
+        return render_template(
+            "index.html",
+            error=message
+        ), 400
 
 
-# --------------------------------------------------
+# ==================================================
 # START SERVER
-# --------------------------------------------------
+# ==================================================
 
 if __name__ == "__main__":
 
@@ -698,5 +810,5 @@ if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=port
-)
+    )
     
