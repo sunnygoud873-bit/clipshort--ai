@@ -1,5 +1,5 @@
 streamlit
 yt-dlp
 gdown
-faster-whisper
-
+openai-whisper
+torch --index-url https://download.pytorch.org/whl/cpu
