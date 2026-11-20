@@ -104,7 +104,6 @@ def make_clip(inp, out, start, duration, aspect, captions_on, caption_text, colo
     r = subprocess.run(cmd, capture_output=True, text=True)
     return os.path.exists(out) and os.path.getsize(out) > 10000
 
-# ---------- UI ----------
 st.markdown('<h1 style="text-align:center;">✂️ ClipShort AI - Pro Editor</h1>', unsafe_allow_html=True)
 st.markdown('<p style="text-align:center;">Turn Any Video Into Viral Shorts</p>', unsafe_allow_html=True)
 
