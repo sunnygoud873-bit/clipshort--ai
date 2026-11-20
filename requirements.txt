@@ -1,10 +1,5 @@
 streamlit
-numpy
-Pillow
-imageio
 imageio-ffmpeg
-faster-whisper
 requests
 gdown
 yt-dlp
-setuptools
