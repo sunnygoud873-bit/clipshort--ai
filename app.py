@@ -69,7 +69,6 @@ def get_mime(path):
         return "image/webp"
     return "video/mp4"
 
-# --- NEW FIX 1: MP3 CONVERT ---
 def convert_to_mp3(video_path, folder):
     mp3_path = folder / (video_path.stem + ".mp3")
     cmd = ["ffmpeg", "-y", "-i", str(video_path), "-vn", "-c:a", "libmp3lame", "-q:a", "2", str(mp3_path)]
@@ -78,7 +77,6 @@ def convert_to_mp3(video_path, folder):
         raise RuntimeError("MP3 convert failed")
     return mp3_path
 
-# --- NEW FIX 2: URL CLEANING - ?dmp / ?si / ?igsh remove ---
 def clean_insta_url(url):
     u = url.strip().split("?")[0].split("&")[0]
     m = re.search(r"/(reel|reels|p)/([A-Za-z0-9_-]+)", u)
@@ -86,11 +84,24 @@ def clean_insta_url(url):
         return "https://www.instagram.com/reel/" + m.group(2) + "/"
     return u + "/" if not u.endswith("/") else u
 
+def get_video_id(url):
+    u = url.strip()
+    if "youtu.be/" in u:
+        return u.split("youtu.be/")[-1].split("?")[0].split("&")[0].split("/")[0]
+    q = parse_qs(urlparse(u).query)
+    if "v" in q:
+        return q["v"][0].split("&")[0]
+    for pat in [r"/shorts/([A-Za-z0-9_-]{11})", r"/live/([A-Za-z0-9_-]{11})", r"/embed/([A-Za-z0-9_-]{11})", r"/v/([A-Za-z0-9_-]{11})"]:
+        m = re.search(pat, u)
+        if m:
+            return m.group(1)
+    m = re.search(r"([A-Za-z0-9_-]{11})(?:[?&#/]|$)", u)
+    if m and ("youtube" in u or "youtu" in u or "sos" in u or "ssyoutube" in u):
+        return m.group(1)
+    return None
+
 def clean_yt_url(url):
-    raw = url.strip().split("?")[0].split("&")[0]
-    vid = get_video_id(raw)
-    if not vid:
-        vid = get_video_id(url.strip())
+    vid = get_video_id(url.strip())
     if vid:
         return "https://www.youtube.com/watch?v=" + vid, vid
     return url.strip(), None
@@ -155,27 +166,30 @@ def download_via_cobalt(url, folder, filename="cobalt_video.mp4"):
             continue
     raise RuntimeError("Cobalt failed: " + last_err)
 
-def get_video_id(url):
-    u = url.strip()
-    if "youtu.be/" in u:
-        return u.split("youtu.be/")[-1].split("?")[0].split("&")[0]
-    q = parse_qs(urlparse(u).query)
-    if "v" in q:
-        return q["v"][0]
-    m = re.search(r"/shorts/([A-Za-z0-9_-]+)", u)
-    if m:
-        return m.group(1)
-    m = re.search(r"/live/([A-Za-z0-9_-]+)", u)
-    if m:
-        return m.group(1)
-    return None
+def download_via_cobalt_quality(url, folder, quality, filename="cobalt_video.mp4"):
+    for base in COBALT_INSTANCES:
+        try:
+            r = requests.post(base, json={"url": url.strip(), "videoQuality": quality, "filenameStyle": "basic"}, headers={"Accept": "application/json", "Content-Type": "application/json"}, timeout=30)
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            vurl = data.get("url")
+            if not vurl:
+                continue
+            return download_from_url(vurl, folder, filename)
+        except Exception:
+            continue
+    raise RuntimeError("Cobalt quality fail")
 
-# --- FIXED: YouTube + MP3 + Cleaning + Lemnos + Invidious + Piped ---
-def download_youtube(url, folder, want_mp3=False):
+def download_youtube(url, folder, want_mp3=False, quality="Auto"):
     clean_url, vid = clean_yt_url(url)
     if not vid:
-        raise RuntimeError("Invalid YouTube link")
-    # METHOD 1: Lemnos - Streamlit IP block avvadu
+        raise RuntimeError("Invalid YouTube link. Paste youtube / youtu.be / sosyoutube link")
+    if quality == "Auto":
+        q_list = ["1080", "720", "480", "360", "240", "144"]
+    else:
+        q_clean = quality.replace("p", "").strip()
+        q_list = [q_clean, "720", "480", "360", "240", "144"]
     try:
         r = requests.get("https://yt.lemnoslife.com/videos?part=player,snippet&id=" + vid, timeout=20)
         if r.status_code == 200:
@@ -194,19 +208,20 @@ def download_youtube(url, folder, want_mp3=False):
                     mp4s = [x for x in fmts if "mp4" in x.get("mimeType", "")]
                     if not mp4s:
                         mp4s = fmts
-                    mp4s = sorted(mp4s, key=lambda x: abs(int(x.get("width", 720)) - 720))
+                    target_h = int(q_list[0]) if q_list[0].isdigit() else 720
+                    mp4s = sorted(mp4s, key=lambda x: abs(int(x.get("height", 720)) - target_h))
                     return download_from_url(mp4s[0]["url"], folder, "youtube_video.mp4")
     except Exception as e:
         print("Lemnos fail", e)
-    # METHOD 2: Cobalt with CLEAN URL
-    try:
-        vid_path = download_via_cobalt(clean_url, folder, "youtube_video.mp4")
-        if want_mp3:
-            return convert_to_mp3(vid_path, folder)
-        return vid_path
-    except Exception as e:
-        print("YT Cobalt fail:", e)
-    # METHOD 3: Invidious
+    for q in q_list:
+        try:
+            vid_path = download_via_cobalt_quality(clean_url, folder, q, "youtube_video.mp4")
+            if vid_path:
+                if want_mp3:
+                    return convert_to_mp3(vid_path, folder)
+                return vid_path
+        except Exception:
+            continue
     for inv in ["https://inv.nadeko.net", "https://invidious.0011.lt", "https://iv.datura.network", "https://invidious.reallyaweso.me", "https://vid.puffyan.us"]:
         try:
             r = requests.get(inv + "/api/v1/videos/" + vid, timeout=15)
@@ -227,7 +242,6 @@ def download_youtube(url, folder, want_mp3=False):
                 return vid_path
         except Exception:
             continue
-    # METHOD 4: Piped
     for host in ["https://pipedapi.kavin.rocks", "https://pipedapi-libre.kavin.rocks", "https://pipedapi.adminforge.de", "https://pipedapi.leptons.xyz"]:
         try:
             r = requests.get(host + "/streams/" + vid, timeout=15)
@@ -239,19 +253,25 @@ def download_youtube(url, folder, want_mp3=False):
                 cand = d.get("videoStreams", [])
             if not cand:
                 continue
+            target_h = int(q_list[0]) if q_list[0].isdigit() else 720
+            cand = sorted(cand, key=lambda x: abs(int(str(x.get("quality", "720")).replace("p", "")) - target_h))
             vid_path = download_from_url(cand[0]["url"], folder, "youtube_video.mp4")
             if want_mp3:
                 return convert_to_mp3(vid_path, folder)
             return vid_path
         except Exception:
             continue
-    # METHOD 5: yt-dlp
     try:
         import yt_dlp
         if want_mp3:
             opts = {"format": "bestaudio/best", "outtmpl": str(folder / "youtube_audio.%(ext)s"), "noplaylist": True, "quiet": True, "no_warnings": True, "retries": 3, "socket_timeout": 30, "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}]}
         else:
-            opts = {"format": "18/best[ext=mp4]/best", "outtmpl": str(folder / "youtube_video.%(ext)s"), "noplaylist": True, "quiet": True, "no_warnings": True, "retries": 3, "socket_timeout": 30, "extractor_args": {"youtube": {"player_client": ["mweb", "ios", "tv"]}}}
+            if quality == "Auto":
+                fmt = "best[ext=mp4]/best"
+            else:
+                h = q_list[0]
+                fmt = f"best[height<={h}][ext=mp4]/best[height<={h}]/best"
+            opts = {"format": fmt, "outtmpl": str(folder / "youtube_video.%(ext)s"), "noplaylist": True, "quiet": True, "no_warnings": True, "retries": 3, "socket_timeout": 30, "extractor_args": {"youtube": {"player_client": ["mweb", "ios", "tv"]}}}
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([clean_url])
         if want_mp3:
@@ -264,14 +284,12 @@ def download_youtube(url, folder, want_mp3=False):
         print("yt-dlp fail", e)
     raise RuntimeError("YouTube failed on all servers. Try again after 2 mins")
 
-# --- FIXED: Instagram + MP3 + Cleaning + ddinstagram + Embed ---
 def download_instagram(url, folder, want_mp3=False):
     clean = clean_insta_url(url)
     if "instagram.com" not in clean and "instagr.am" not in clean:
         raise RuntimeError("Invalid Instagram link")
     m = re.search(r"/reel/([A-Za-z0-9_-]+)", clean)
     shortcode = m.group(1) if m else None
-    # METHOD 1: Cobalt CLEAN
     try:
         vid_path = download_via_cobalt(clean, folder, "insta_video.mp4")
         if want_mp3:
@@ -279,7 +297,6 @@ def download_instagram(url, folder, want_mp3=False):
         return vid_path
     except Exception as e:
         print("Insta cobalt fail", e)
-    # METHOD 2: ddinstagram - Public reels ki best
     if shortcode:
         for mirror in ["https://www.ddinstagram.com", "https://d.ddinstagram.com", "https://www.vxinstagram.com"]:
             try:
@@ -304,7 +321,6 @@ def download_instagram(url, folder, want_mp3=False):
                         continue
             except Exception:
                 continue
-    # METHOD 3: yt-dlp CLEAN
     try:
         import yt_dlp
         if want_mp3:
@@ -321,7 +337,6 @@ def download_instagram(url, folder, want_mp3=False):
             return files[0]
     except Exception as e:
         print("Insta yt-dlp fail", e)
-    # METHOD 4: Embed
     try:
         r = requests.get(clean + "embed/", headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
         vm = re.search(r'https://[^"]+\.mp4[^"]*', r.text)
@@ -333,7 +348,7 @@ def download_instagram(url, folder, want_mp3=False):
             return vid_path
     except Exception:
         pass
-    raise RuntimeError("Instagram failed. Link lo ?dmp lekunda paste chey: https://www.instagram.com/reel/Dfqu4ikT61P/")
+    raise RuntimeError("Instagram failed. Paste clean link: https://www.instagram.com/reel/Dfqu4ikT61P/")
 
 def get_highlight_scores(video_path, total):
     try:
@@ -501,7 +516,7 @@ def get_source(work, stype, url, up):
     if stype == "Google Drive":
         return download_drive(url, work)
     if stype == "YouTube":
-        return download_youtube(url, work, want_mp3=False)
+        return download_youtube(url, work, want_mp3=False, quality="Auto")
     if stype == "TikTok / Insta / X / FB (Cobalt)":
         return download_via_cobalt(clean_insta_url(url) if "instagram" in url else url, work)
     if up is None:
@@ -575,7 +590,7 @@ if main_mode == "CLIPPER":
         elif source_type == "TikTok / Insta / X / FB (Cobalt)":
             video_url = st.text_input("Link", placeholder="https://www.instagram.com/reel/...", key="clip_cobalt_final")
         else:
-            video_url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=...", key="clip_yt_final")
+            video_url = st.text_input("YouTube URL", placeholder="Paste any YouTube link - youtube / youtu.be / sosyoutube", key="clip_yt_final")
         music_upload = st.file_uploader("Background Music (Optional)", type=["mp3", "wav", "m4a", "aac", "ogg", "flac"], key="clip_music_final")
         st.subheader("Step 1: Preview")
         if st.button("GENERATE PREVIEW - 5 Sec", use_container_width=True, key="clip_prev_final"):
@@ -668,10 +683,11 @@ if main_mode == "CLIPPER":
 
 if main_mode == "DOWNLOADER":
     st.subheader("Downloader - Video + MP3")
-    st.caption("Paste Link > Choose Video or MP3 > Download")
+    st.caption("Paste any YouTube link - Auto converts to real YouTube link")
     st.markdown("### YouTube Downloader")
-    yt_url = st.text_input("YouTube Link", placeholder="https://youtube.com/watch?v=...", key="dl_yt_url_final")
+    yt_url = st.text_input("YouTube Link", placeholder="youtube / youtu.be / sosyoutube / ssyoutube - any link", key="dl_yt_url_final")
     yt_format = st.selectbox("Format - YouTube", ["Video - MP4", "Audio - MP3"], key="dl_yt_format_final")
+    yt_quality = st.selectbox("Quality - Y2mate Style", ["Auto", "1080p", "720p", "480p", "360p", "240p", "144p"], key="dl_yt_q_final")
     if st.button("DOWNLOAD YOUTUBE", type="primary", use_container_width=True, key="dl_yt_btn_final"):
         if not yt_url.strip().startswith(("https://", "http://")):
             st.error("Please paste a valid YouTube link")
@@ -679,15 +695,15 @@ if main_mode == "DOWNLOADER":
             work = Path(tempfile.mkdtemp(prefix="yt_dl_"))
             want_mp3 = "MP3" in yt_format
             try:
-                with st.spinner("Downloading... Please wait"):
-                    src = download_youtube(yt_url, work, want_mp3=want_mp3)
+                with st.spinner(f"Downloading... {yt_quality} - Please wait 10-15 sec"):
+                    src = download_youtube(yt_url, work, want_mp3=want_mp3, quality=yt_quality)
                 if want_mp3:
                     st.success("YouTube MP3 Done!")
                     st.audio(str(src))
                     with open(src, "rb") as f:
                         st.download_button("SAVE MP3 TO PHONE - YouTube", f, file_name=src.name, mime="audio/mp3", key="dl_yt_save_mp3_final")
                 else:
-                    st.success("YouTube Video Done!")
+                    st.success(f"YouTube Video Done! - {yt_quality}")
                     st.video(str(src))
                     with open(src, "rb") as f:
                         st.download_button("SAVE VIDEO TO PHONE - YouTube", f, file_name=src.name, mime=get_mime(src), key="dl_yt_save_final")
@@ -697,6 +713,7 @@ if main_mode == "DOWNLOADER":
     st.markdown("### Instagram Downloader")
     insta_url = st.text_input("Instagram Link", placeholder="https://instagram.com/reel/...", key="dl_insta_url_final")
     insta_format = st.selectbox("Format - Instagram", ["Video - MP4", "Audio - MP3"], key="dl_insta_format_final")
+    insta_quality = st.selectbox("Quality", ["720p - HD", "480p - Fast", "1080p - Full HD"], key="dl_insta_q_final")
     if st.button("DOWNLOAD INSTAGRAM", type="primary", use_container_width=True, key="dl_insta_btn_final"):
         if not insta_url.strip().startswith(("https://", "http://")):
             st.error("Please paste a valid Instagram link")
@@ -722,4 +739,4 @@ if main_mode == "DOWNLOADER":
                         st.download_button("SAVE VIDEO TO PHONE - Instagram", f, file_name=src.name, mime=get_mime(src), key="dl_insta_save_final")
             except Exception as e:
                 st.error("Download Failed: " + str(e))
-    st.info("Tip: Link lo ?dmp / ?igsh unte auto-clean avthundi. Clean link: https://www.instagram.com/reel/Dfqu4ikT61P/")
+    st.info("Tip: Any YouTube link works - sosyoutube / ssyoutube / youtu.be auto converts. Insta: Clean link https://www.instagram.com/reel/Dfqu4ikT61P/")
