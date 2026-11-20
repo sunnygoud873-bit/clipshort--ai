@@ -1,10 +1,19 @@
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import streamlit as st
-import subprocess, tempfile, shutil, re, time
+import subprocess
+import tempfile
+import shutil
+import re
+import gc
+import wave
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 st.set_page_config(page_title="CLIPSHORT AI", page_icon="🎬", layout="wide")
-st.markdown("<h1>🎬 CLIPSHORT AI</h1><p>English + Indian | Auto Subtitles | Shorts</p>", unsafe_allow_html=True)
+st.markdown("<h1>🎬 CLIPSHORT AI</h1><p>Highlight Moments + Normal Clipping | Trim + Effects | No Subtitles | Fast & Low CPU</p>", unsafe_allow_html=True)
 
 if "preview_done" not in st.session_state:
     st.session_state.preview_done = False
@@ -14,18 +23,18 @@ if "preview_bytes" not in st.session_state:
 def run_cmd(args):
     r = subprocess.run(args, capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError((r.stderr or r.stdout)[-2000:])
+        raise RuntimeError((r.stderr or r.stdout)[-1500:])
     return r.stdout.strip()
 
 def check_ffmpeg():
     return shutil.which("ffmpeg") is not None
 
 def get_duration(path):
-    v = run_cmd(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(path)])
+    v = run_cmd(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)])
     return float(v)
 
 def has_audio(path):
-    r = subprocess.run(["ffprobe","-v","error","-select_streams","a:0","-show_entries","stream=codec_type","-of","csv=p=0",str(path)], capture_output=True, text=True)
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
     return bool(r.stdout.strip())
 
 def get_drive_id(url):
@@ -44,101 +53,114 @@ def download_drive(url, folder):
     target = folder / "drive_video.mp4"
     dl_url = "https://drive.google.com/uc?export=download&id=" + fid + "&confirm=t"
     s = requests.Session()
-    r = s.get(dl_url, stream=True, timeout=60)
-    total = int(r.headers.get("content-length", 0))
-    done = 0
+    r = s.get(dl_url, stream=True, timeout=120)
     with open(target, "wb") as f:
-        for chunk in r.iter_content(chunk_size=1024*1024*2):
+        for chunk in r.iter_content(chunk_size=1024 * 1024 * 2):
             if chunk:
                 f.write(chunk)
-                done += len(chunk)
     if not target.exists() or target.stat().st_size < 10000:
-        raise RuntimeError("Drive failed. Set Anyone with link Viewer")
+        raise RuntimeError("Drive failed. Set Anyone with link to Viewer")
     return target
 
 def download_youtube(url, folder):
-    import yt_dlp
-    opts = {"format":"best[height<=720][ext=mp4]/best[height<=720]/best","outtmpl":str(folder/"youtube_video.%(ext)s"),"noplaylist":True,"quiet":True}
-    with yt_dlp.YoutubeDL(opts) as d:
-        d.download([url])
-    files = list(folder.glob("youtube_video.*"))
-    if not files:
-        raise RuntimeError("YouTube blocked. Upload video instead")
-    return files[0]
-
-LANGUAGE_CODES = {
-    "English - English": "en",
-    "English (Translate)": "translate",
-    "Telugu - తెలుగు": "te",
-    "Hindi - हिन्दी": "hi",
-    "Tamil - தமிழ்": "ta",
-    "Kannada - ಕನ್ನಡ": "kn",
-    "Malayalam - മലയാളം": "ml",
-    "Bengali - বাংলা": "bn",
-    "Marathi - मराठी": "mr",
-    "Gujarati - ગુજરાતી": "gu",
-    "Punjabi - ਪੰਜਾਬੀ": "pa",
-    "Urdu - اردو": "ur",
-    "Auto Detect": "auto",
-}
-
-FONT_FOR_LANG = {
-    "te": "Noto Sans Telugu",
-    "hi": "Noto Sans Devanagari",
-    "mr": "Noto Sans Devanagari",
-    "ta": "Noto Sans Tamil",
-    "kn": "Noto Sans Kannada",
-    "ml": "Noto Sans Malayalam",
-    "bn": "Noto Sans Bengali",
-    "gu": "Noto Sans Gujarati",
-    "pa": "Noto Sans Gurmukhi",
-    "en": "Noto Sans",
-    "translate": "Noto Sans",
-    "auto": "Noto Sans",
-}
-
-@st.cache_resource
-def load_whisper():
-    from faster_whisper import WhisperModel
-    return WhisperModel("tiny", device="cpu", compute_type="int8")
-
-def transcribe_video(path, language):
     try:
-        audio_path = Path(str(path) + "_audio.wav")
-        subprocess.run(["ffmpeg","-y","-i",str(path),"-vn","-ac","1","-ar","16000","-af","loudnorm,volume=2.0","-c:a","pcm_s16le",str(audio_path)], capture_output=True)
-        if not audio_path.exists() or audio_path.stat().st_size < 1000:
-            return []
-        model = load_whisper()
-        code = LANGUAGE_CODES.get(language, "te")
-        opts = {"vad_filter": False, "beam_size": 1, "temperature": 0.0}
-        if code == "translate":
-            opts["task"] = "translate"
-        elif code == "auto":
-            pass
-        else:
-            opts["language"] = code
-        segments, _ = model.transcribe(str(audio_path), **opts)
-        out = []
-        for s in segments:
-            txt = s.text.strip()
-            if txt and getattr(s, "no_speech_prob", 0) < 0.95:
-                out.append({"start": float(s.start), "end": float(s.end), "text": txt})
-        return out
-    except Exception as e:
-        print("Subtitle skipped", e)
-        return []
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError("yt-dlp not installed. Add 'yt-dlp' to requirements.txt and Reboot!")
+    url = url.strip()
+    # FIX: Try 3 formats - one fails, next will work
+    attempts = [
+        {
+            "format": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best",
+            "merge_output_format": "mp4",
+        },
+        {
+            "format": "best[height<=720][ext=mp4]/best[height<=720]/best",
+            "merge_output_format": "mp4",
+        },
+        {
+            "format": "best",
+            "merge_output_format": "mp4",
+        },
+    ]
+    last_error = ""
+    for i, fmt in enumerate(attempts):
+        try:
+            for old in folder.glob("youtube_video.*"):
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
+            opts = {
+                "format": fmt["format"],
+                "merge_output_format": fmt["merge_output_format"],
+                "outtmpl": str(folder / "youtube_video.%(ext)s"),
+                "noplaylist": True,
+                "quiet": True,
+                "no_warnings": True,
+                "retries": 3,
+                "socket_timeout": 30,
+                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+            files = list(folder.glob("youtube_video.*"))
+            files = [f for f in files if f.suffix.lower() in [".mp4", ".webm", ".mkv", ".mov", ".m4v"]]
+            if files and files[0].stat().st_size > 10000:
+                return files[0]
+            last_error = "Downloaded file is empty"
+        except Exception as e:
+            last_error = str(e)[-500:]
+            continue
+    raise RuntimeError("YouTube download failed after 3 attempts. Reason: " + last_error + " | Try Upload video or Google Drive instead.")
 
-def choose_starts(segments, total, length, count):
-    if total <= length:
-        return [0.0]
-    step = max(2.0, min(length/5, 6.0))
+def get_highlight_scores(video_path, total):
+    try:
+        import numpy as np
+        audio_path = Path(str(video_path) + "_audio.wav")
+        subprocess.run(["ffmpeg", "-y", "-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio_path)], capture_output=True)
+        if not audio_path.exists() or audio_path.stat().st_size < 1000:
+            return None
+        with wave.open(str(audio_path), "rb") as wf:
+            n_frames = wf.getnframes()
+            rate = wf.getframerate()
+            data = wf.readframes(n_frames)
+        audio = np.frombuffer(data, dtype=np.int16).astype(float) / 32768.0
+        scores = []
+        window = rate
+        for i in range(int(total)):
+            start = i * window
+            end = min((i + 1) * window, len(audio))
+            if end <= start:
+                scores.append(0.0)
+                continue
+            chunk = audio[start:end]
+            rms = float(np.sqrt(np.mean(chunk ** 2))) if len(chunk) > 0 else 0.0
+            peak = float(np.max(np.abs(chunk))) if len(chunk) > 0 else 0.0
+            scores.append(rms * 0.7 + peak * 0.3)
+        smoothed = []
+        for i in range(len(scores)):
+            vals = scores[max(0, i - 1):min(len(scores), i + 2)]
+            smoothed.append(sum(vals) / len(vals))
+        return smoothed
+    except Exception as e:
+        print("Highlight detection failed", e)
+        return None
+
+def choose_highlight_starts(scores, total, length, count, trim_start, trim_end):
+    if scores is None:
+        return None
     cands = []
-    start = 0.0
-    while start + length <= total:
+    start = trim_start
+    step = 2.0
+    while start + length <= trim_end:
         end = start + length
-        score = 0
-        for s in segments:
-            score += max(0.0, min(s["end"], end) - max(s["start"], start))
+        s_idx = int(start)
+        e_idx = int(min(end, len(scores)))
+        score = sum(scores[s_idx:e_idx]) if e_idx > s_idx else 0
+        if s_idx < len(scores) and e_idx > s_idx:
+            peak = max(scores[s_idx:e_idx])
+            score += peak * 2.0
         cands.append((score, start))
         start += step
     cands.sort(key=lambda x: x[0], reverse=True)
@@ -153,32 +175,23 @@ def choose_starts(segments, total, length, count):
         if len(sel) >= count:
             break
     if not sel:
-        sel = [0.0]
+        sel = [trim_start]
     return sorted(sel)
 
-def ass_time(sec):
-    h = int(sec//3600)
-    m = int((sec%3600)//60)
-    r = sec%60
-    return f"{h}:{m:02d}:{r:05.2f}"
+def choose_normal_starts(total, length, count, trim_start, trim_end):
+    avail = trim_end - trim_start
+    if avail <= length:
+        return [trim_start]
+    if count == 1:
+        return [trim_start + avail / 2 - length / 2]
+    step = (avail - length) / (count - 1) if count > 1 else 0
+    starts = []
+    for i in range(count):
+        starts.append(trim_start + i * step)
+    return starts
 
-def ass_color(v):
-    v = v.lstrip("#")
-    if not re.fullmatch(r"[0-9a-fA-F]{6}", v):
-        v = "FFFFFF"
-    return f"&H00{v[4:6]}{v[2:4]}{v[0:2]}&".upper()
-
-RATIOS = {
-    "9:16 - Shorts / Reels": (1080, 1920),
-    "16:9 - YouTube": (1920, 1080),
-    "1:1 - Instagram Post": (1080, 1080),
-    "4:5 - Instagram Portrait": (1080, 1350),
-}
-RESOLUTIONS = {
-    "480p - Fast": 480,
-    "720p - HD": 720,
-    "1080p - Full HD": 1080,
-}
+RATIOS = {"9:16 - Shorts / Reels": (1080, 1920), "16:9 - YouTube": (1920, 1080), "1:1 - Instagram Post": (1080, 1080), "4:5 - Instagram Portrait": (1080, 1350)}
+RESOLUTIONS = {"480p - Fast": 480, "720p - HD": 720, "1080p - Full HD": 1080}
 
 def get_output_size(ratio_label, res_label):
     base_w, base_h = RATIOS[ratio_label]
@@ -193,79 +206,72 @@ def get_output_size(ratio_label, res_label):
     h = h - (h % 2)
     return w, h
 
-def write_subtitles(f, segments, cs, ce, cfg, out_h):
-    align = {"Bottom": 2, "Middle": 5, "Top": 8}[cfg["position"]]
-    bold = -1 if cfg["bold"] else 0
-    border = 3 if cfg["background"] else 1
-    outline = 0 if cfg["background"] else cfg["outline"]
-    lang_code = LANGUAGE_CODES.get(cfg["language"], "te")
-    font = FONT_FOR_LANG.get(lang_code, "Noto Sans")
-    fs = cfg["font_size"]
-    if out_h <= 854:
-        fs = max(18, int(cfg["font_size"] * 0.45))
-    elif out_h <= 1280:
-        fs = max(22, int(cfg["font_size"] * 0.65))
-    margin_v = int(90 * (out_h / 1920)) if out_h < 1920 else 90
-    lines = []
-    lines.append("[Script Info]")
-    lines.append("ScriptType: v4.00+")
-    lines.append("PlayResX: " + str(cfg["out_w"]))
-    lines.append("PlayResY: " + str(cfg["out_h"]))
-    lines.append("")
-    lines.append("[V4+ Styles]")
-    lines.append("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding")
-    style = "Style: Default," + font + "," + str(fs) + "," + ass_color(cfg["text_color"]) + ",&H000000FF&," + ass_color(cfg["outline_color"]) + "," + ass_color(cfg["background_color"]) + "," + str(bold) + ",0,0,0,100,100,0,0," + str(border) + "," + str(outline) + "," + str(cfg["shadow"]) + "," + str(align) + ",60,60," + str(margin_v) + ",1"
-    lines.append(style)
-    lines.append("")
-    lines.append("[Events]")
-    lines.append("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text")
-    for s in segments:
-        st_ = max(s["start"], cs)
-        en = min(s["end"], ce)
-        if en <= st_:
-            continue
-        cap = s["text"].replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}").replace("\n", " ")
-        if cfg["uppercase"]:
-            cap = cap.upper()
-        dlg = "Dialogue: 0," + ass_time(st_ - cs) + "," + ass_time(en - cs) + ",Default,,0,0,0,," + cap
-        lines.append(dlg)
-    f.write_text("\n".join(lines), encoding="utf-8")
+def build_effect_filter(cfg, length):
+    filters = []
+    eff = cfg["effect"]
+    bright = cfg["brightness"]
+    cont = cfg["contrast"]
+    sat = cfg["saturation"]
+    if eff == "Cinematic - Dark + Warm":
+        bright -= 0.05
+        cont += 0.15
+        sat -= 0.10
+        filters.append("curves=r='0/0 0.5/0.45 1/1':g='0/0 0.5/0.5 1/1':b='0/0 0.5/0.55 1/0.95'")
+    elif eff == "Vivid - Color Pop":
+        bright += 0.05
+        cont += 0.20
+        sat += 0.40
+    elif eff == "Black & White":
+        sat = 0.0
+        cont += 0.10
+    elif eff == "Vintage - Old Film":
+        bright += 0.05
+        cont -= 0.05
+        sat -= 0.20
+        filters.append("noise=alls=6:allf=t")
+    elif eff == "Warm - Golden":
+        filters.append("colorbalance=rs=0.15:gs=0.05:bs=-0.15")
+    elif eff == "Cool - Blue":
+        filters.append("colorbalance=rs=-0.10:gs=0.0:bs=0.15")
+    filters.append(f"eq=brightness={bright:.2f}:contrast={cont:.2f}:saturation={sat:.2f}")
+    if cfg["sharpen"] > 0:
+        filters.append(f"unsharp=5:5:{cfg['sharpen']:.1f}:5:5:0.0")
+    if cfg["blur"] > 0:
+        filters.append(f"gblur=sigma={cfg['blur']:.1f}")
+    if cfg["fade_in"]:
+        filters.append("fade=t=in:st=0:d=0.8")
+    if cfg["fade_out"]:
+        filters.append(f"fade=t=out:st={max(0, length-0.8):.1f}:d=0.8")
+    return filters
 
-def sub_path(p):
-    v = str(p.resolve()).replace("\\", "/")
-    return v.replace(":", "\\:").replace("'", "\\'").replace(",", "\\,")
-
-def render_clip(source, output, start, length, segments, cfg, music):
+def render_clip(source, output, start, length, cfg, music):
     out_w = cfg["out_w"]
     out_h = cfg["out_h"]
-    args = ["ffmpeg","-y","-ss",str(start),"-i",str(source)]
+    args = ["ffmpeg", "-y", "-threads", "1", "-ss", str(start), "-i", str(source)]
     if music:
-        args += ["-stream_loop","-1","-i",str(music)]
+        args += ["-stream_loop", "-1", "-i", str(music)]
     filters = []
     filters.append("scale=" + str(out_w) + ":" + str(out_h) + ":force_original_aspect_ratio=increase")
     filters.append("crop=" + str(out_w) + ":" + str(out_h))
     filters.append("setsar=1")
+    if cfg["speed"] != 1.0:
+        filters.append(f"setpts={1.0/cfg['speed']:.3f}*PTS")
+    filters += build_effect_filter(cfg, length)
     filters.append("fps=30")
-    sub_file = output.with_suffix(".ass")
-    if cfg["subtitles"] and segments:
-        write_subtitles(sub_file, segments, start, start+length, cfg, out_h)
-        filters.append("ass='" + sub_path(sub_file) + "'")
-    args += ["-t",str(length),"-vf",",".join(filters),"-c:v","libx264","-preset",cfg["preset"],"-crf",str(cfg["crf"]),"-pix_fmt","yuv420p"]
+    args += ["-t", str(length), "-vf", ",".join(filters), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "1", "-pix_fmt", "yuv420p"]
     src_audio = has_audio(source)
+    atempo = f"atempo={cfg['speed']:.2f}," if cfg["speed"] != 1.0 else ""
     if music and src_audio:
-        args += ["-filter_complex","[0:a]volume=" + str(cfg["source_volume"]) + "[a0];[1:a]volume=" + str(cfg["music_volume"]) + "[a1];[a0][a1]amix=inputs=2:duration=first[aout]","-map","0:v:0","-map","[aout]","-c:a","aac"]
+        args += ["-filter_complex", "[0:a]" + atempo + "volume=" + str(cfg["source_volume"]) + "[a0];[1:a]volume=" + str(cfg["music_volume"]) + "[a1];[a0][a1]amix=inputs=2:duration=first[aout]", "-map", "0:v:0", "-map", "[aout]", "-c:a", "aac"]
     elif music:
-        args += ["-map","0:v:0","-map","1:a:0","-af","volume=" + str(cfg["music_volume"])," -c:a","aac"]
+        args += ["-map", "0:v:0", "-map", "1:a:0", "-af", "volume=" + str(cfg["music_volume"]), "-c:a", "aac"]
     elif src_audio:
-        args += ["-af","volume=" + str(cfg["source_volume"])," -c:a","aac"]
+        args += ["-af", atempo + "volume=" + str(cfg["source_volume"]), "-c:a", "aac"]
     else:
         args += ["-an"]
-    # Fix audio args typo - rebuild clean
-    args = [a.strip() for a in args]
-    args += ["-movflags","+faststart",str(output)]
+    args += ["-movflags", "+faststart", str(output)]
     run_cmd(args)
-    if sub_file.exists():
-        sub_file.unlink()
+    gc.collect()
 
 def get_source(work, source_type, video_url, video_upload):
     if source_type == "Google Drive":
@@ -273,65 +279,98 @@ def get_source(work, source_type, video_url, video_upload):
     elif source_type == "YouTube":
         return download_youtube(video_url, work)
     else:
-        source = work / ("uploaded_video" + Path(video_upload.name).suffix.lower())
+        suffix = Path(video_upload.name).suffix.lower()
+        if suffix not in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]:
+            suffix = ".mp4"
+        source = work / ("uploaded_video" + suffix)
         with source.open("wb") as f:
-            shutil.copyfileobj(video_upload, f, length=8*1024*1024)
+            shutil.copyfileobj(video_upload, f, length=8 * 1024 * 1024)
         return source
 
 def get_music(work, music_upload):
     if music_upload is None:
         return None
-    music = work / ("background_music" + Path(music_upload.name).suffix.lower())
+    suffix = Path(music_upload.name).suffix.lower()
+    if suffix not in [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"]:
+        suffix = ".mp3"
+    music = work / ("background_music" + suffix)
     with music.open("wb") as f:
-        shutil.copyfileobj(music_upload, f, length=1024*1024)
+        shutil.copyfileobj(music_upload, f, length=1024 * 1024)
     return music
 
-st.subheader("Video Source")
-source_type = st.radio("Choose source", ["Google Drive","Upload video","YouTube"], horizontal=True)
+st.subheader("📁 Video Source")
+source_type = st.radio("Choose source", ["Google Drive", "Upload video", "YouTube"], horizontal=True)
 video_url = ""
 video_upload = None
 if source_type == "Google Drive":
     video_url = st.text_input("Google Drive sharing link", placeholder="Paste Drive link")
+    st.caption("Drive: Anyone with the link -> Viewer")
 elif source_type == "Upload video":
-    video_upload = st.file_uploader("Upload video", type=["mp4","mov","mkv","webm","avi","m4v"])
+    video_upload = st.file_uploader("Upload video", type=["mp4", "mov", "mkv", "webm", "avi", "m4v"])
 else:
-    video_url = st.text_input("YouTube URL", placeholder="Paste YouTube link")
+    video_url = st.text_input("YouTube URL", placeholder="Paste YouTube link - Example: https://www.youtube.com/watch?v=...")
+    st.caption("If YouTube fails, use Google Drive or Upload - YouTube sometimes blocks servers.")
 
-st.subheader("Background Music")
-music_upload = st.file_uploader("Upload music (optional)", type=["mp3","wav","m4a","aac","ogg","flac"])
+st.subheader("🎵 Background Music")
+music_upload = st.file_uploader("Upload music (optional)", type=["mp3", "wav", "m4a", "aac", "ogg", "flac"])
 
-st.subheader("Settings")
+st.subheader("🎯 Clipping Mode - Choose How To Clip")
+clip_mode = st.radio("How do you want to clip?", ["🔥 Highlight Moments - Best Parts Only (For 10 Min Videos)", "📐 Normal Clipping - Evenly Spaced Clips"], index=0)
+if "Highlight" in clip_mode:
+    st.info("🔥 Highlight Mode: App will listen to audio loudness (laughs, cheers, loud moments, music beats) and pick only the BEST moments from your 10 min video.")
+else:
+    st.info("📐 Normal Mode: App will cut your video into evenly spaced clips from start to end.")
+
 c1, c2 = st.columns(2)
 with c1:
-    clip_count = st.slider("Maximum clips", 1, 5, 3)
+    clip_count = st.slider("Maximum clips", 1, 30, 3)
     clip_length = st.slider("Clip duration (seconds)", 10, 60, 30)
-    subtitles = st.toggle("Automatic subtitles", value=True)
-    language = st.selectbox("Subtitle language", list(LANGUAGE_CODES.keys()), index=2)
 with c2:
-    font_size = st.slider("Font size", 18, 80, 48)
-    bold = st.toggle("Bold font", True)
-    uppercase = st.toggle("Uppercase text", False)
-    position = st.selectbox("Caption position", ["Bottom","Middle","Top"])
-
-c3, c4 = st.columns(2)
-with c3:
-    text_color = st.color_picker("Text colour", "#FFFFFF")
-    outline_color = st.color_picker("Outline colour", "#000000")
-    outline = st.slider("Outline thickness", 0, 10, 3)
-with c4:
-    background = st.toggle("Caption background", False)
-    background_color = st.color_picker("Caption background colour", "#151515")
-    shadow = st.slider("Caption shadow", 0, 5, 2)
-
-c5, c6, c7 = st.columns(3)
-with c5:
+    quality = st.selectbox("Video quality", ["Fast - Low CPU", "Balanced", "High"], index=0)
     source_volume = st.slider("Original audio volume", 0.0, 2.0, 1.5)
-with c6:
     music_volume = st.slider("Background music volume", 0.0, 2.0, 0.25)
-with c7:
-    quality = st.selectbox("Video quality", ["Fast","Balanced","High"], index=0)
 
-st.markdown("### Ratio & Resolution")
+if clip_count > 10:
+    st.warning(f"You selected {clip_count} clips. It will take more time. For daily use, 3-5 clips is best.")
+
+st.subheader("✂️ Trim Settings")
+use_trim = st.toggle("Enable Trim - Use only a part of video", value=False)
+trim_start = 0.0
+trim_end = 9999.0
+if use_trim:
+    cT1, cT2 = st.columns(2)
+    with cT1:
+        trim_start = st.number_input("Start Time (seconds) - Where to start?", min_value=0.0, value=0.0, step=1.0)
+        st.caption("Example: 120 = Start from 2:00")
+    with cT2:
+        trim_end = st.number_input("End Time (seconds) - Where to end?", min_value=1.0, value=60.0, step=1.0)
+        st.caption("Example: 300 = End at 5:00")
+    st.info(f"Trim: Using only {trim_start:.0f}s to {trim_end:.0f}s - Rest will be ignored!")
+    if trim_end <= trim_start:
+        st.error("End Time must be greater than Start Time!")
+else:
+    st.caption("Trim OFF - Full video will be used")
+
+st.subheader("🎨 Video Effects")
+effect = st.selectbox("Video Effect / Filter", ["None - Original", "Cinematic - Dark + Warm", "Vivid - Color Pop", "Black & White", "Vintage - Old Film", "Warm - Golden", "Cool - Blue"])
+e1, e2, e3 = st.columns(3)
+with e1:
+    brightness = st.slider("Brightness", -0.3, 0.3, 0.0, step=0.01)
+    speed = st.selectbox("Speed", [0.5, 0.75, 1.0, 1.25, 1.5, 2.0], index=2)
+with e2:
+    contrast = st.slider("Contrast", 0.5, 2.0, 1.0, step=0.05)
+    sharpen = st.slider("Sharpen", 0.0, 3.0, 0.0, step=0.5)
+with e3:
+    saturation = st.slider("Saturation / Color", 0.0, 2.5, 1.0, step=0.05)
+    blur = st.slider("Blur (0 = No Blur)", 0.0, 3.0, 0.0, step=0.5)
+f1, f2 = st.columns(2)
+with f1:
+    fade_in = st.toggle("Fade In - Start from black", value=False)
+with f2:
+    fade_out = st.toggle("Fade Out - End to black", value=False)
+st.caption(f"Effect: {effect} | Speed: {speed}x | Brightness: {brightness} | Contrast: {contrast} | Saturation: {saturation}")
+
+st.markdown("### 📐 Ratio & Resolution")
 r1, r2 = st.columns(2)
 with r1:
     ratio_label = st.selectbox("Aspect Ratio", list(RATIOS.keys()), index=0)
@@ -340,15 +379,15 @@ with r2:
 out_w, out_h = get_output_size(ratio_label, res_label)
 st.info("Selected: " + ratio_label + " | " + res_label + " | " + str(out_w) + "x" + str(out_h))
 
-cfg = {"subtitles": subtitles, "font_size": font_size, "text_color": text_color, "outline_color": outline_color, "outline": outline, "position": position, "bold": bold, "uppercase": uppercase, "background": background, "background_color": background_color, "shadow": shadow, "source_volume": source_volume, "music_volume": music_volume, "preset": {"Fast":"ultrafast","Balanced":"veryfast","High":"fast"}[quality], "crf": {"Fast":28,"Balanced":23,"High":19}[quality], "out_w": out_w, "out_h": out_h, "ratio": ratio_label, "resolution": res_label, "language": language}
+cfg = {"source_volume": source_volume, "music_volume": music_volume, "preset": {"Fast - Low CPU": "ultrafast", "Balanced": "veryfast", "High": "fast"}[quality], "crf": {"Fast - Low CPU": 28, "Balanced": 23, "High": 19}[quality], "out_w": out_w, "out_h": out_h, "ratio": ratio_label, "resolution": res_label, "effect": effect, "brightness": brightness, "contrast": contrast, "saturation": saturation, "sharpen": sharpen, "blur": blur, "speed": float(speed), "fade_in": fade_in, "fade_out": fade_out}
 
-st.subheader("Step 1: Preview - Mandatory")
-st.warning("First Preview Chudu - Tarvatha Ne Generate Open Avuthundi")
+st.subheader("👀 Step 1: Preview (Mandatory)")
+st.warning("First check Preview - Then Generate button will unlock")
 if st.button("GENERATE PREVIEW - 5 Sec Sample", use_container_width=True, key="btn_preview"):
     if source_type == "Upload video" and video_upload is None:
         st.error("Please upload a video first")
         st.stop()
-    if source_type != "Upload video" and not video_url.strip().startswith(("https://","http://")):
+    if source_type != "Upload video" and not video_url.strip().startswith(("https://", "http://")):
         st.error("Please enter a valid video link")
         st.stop()
     if not check_ffmpeg():
@@ -359,16 +398,12 @@ if st.button("GENERATE PREVIEW - 5 Sec Sample", use_container_width=True, key="b
         st.write("Making Preview... Please wait")
         source = get_source(work, source_type, video_url, video_upload)
         music = get_music(work, music_upload)
-        segs = []
-        if cfg["subtitles"]:
-            st.write("Transcribing in " + language)
-            segs = transcribe_video(source, language)
-            st.write("Found " + str(len(segs)) + " subtitle lines")
+        p_start = trim_start if use_trim else 0.0
         preview_out = work / "preview.mp4"
-        render_clip(source, preview_out, 0, 5, segs, cfg, music)
+        render_clip(source, preview_out, p_start, 5, cfg, music)
         with open(preview_out, "rb") as f:
             st.session_state.preview_bytes = f.read()
-        st.success("Preview Ready")
+        st.success("Preview Ready - Check Trim + Effect!")
         st.video(st.session_state.preview_bytes)
         st.session_state.preview_done = True
     except Exception as e:
@@ -377,13 +412,12 @@ if st.button("GENERATE PREVIEW - 5 Sec Sample", use_container_width=True, key="b
 
 if st.session_state.preview_bytes is not None:
     st.video(st.session_state.preview_bytes)
-
 if st.session_state.preview_done:
-    st.success("Preview Approved - Now Generate")
+    st.success("Preview Approved - Now you can Generate!")
 else:
-    st.warning("Generate Locked - Preview First")
+    st.warning("Generate Locked - Watch Preview First")
 
-st.subheader("Step 2: Generate Clips")
+st.subheader("🚀 Step 2: Generate Your Clips")
 generate_disabled = not st.session_state.preview_done
 if st.button("GENERATE CLIPS", type="primary", use_container_width=True, disabled=generate_disabled, key="btn_generate"):
     work = Path(tempfile.mkdtemp(prefix="clipshort_"))
@@ -392,39 +426,40 @@ if st.button("GENERATE CLIPS", type="primary", use_container_width=True, disable
         source = get_source(work, source_type, video_url, video_upload)
         music = get_music(work, music_upload)
         total = get_duration(source)
-        st.write("Video length: " + str(round(total, 1)) + " sec")
-        segments = []
-        if cfg["subtitles"]:
-            st.write("Transcribing in " + language)
-            segments = transcribe_video(source, language)
-            if not segments:
-                st.warning("No speech found - Making clips without subtitles")
-                cfg["subtitles"] = False
+        st.write("Video length: " + str(round(total, 1)) + " sec (" + str(round(total / 60, 1)) + " min)")
+        t_start = trim_start if use_trim else 0.0
+        t_end = min(trim_end, total) if use_trim else total
+        if t_end <= t_start:
+            st.error("Trim End must be greater than Trim Start!")
+            st.stop()
+        st.write(f"Trim: {t_start:.0f}s to {t_end:.0f}s | Mode: {clip_mode} | Effect: {effect} | Speed: {speed}x")
+        if "Highlight" in clip_mode:
+            st.write("Analyzing audio for highlight moments... (Loud parts = Best parts)")
+            scores = get_highlight_scores(source, total)
+            if scores is None:
+                st.warning("No audio found - Falling back to Normal Clipping")
+                starts = choose_normal_starts(total, clip_length, clip_count, t_start, t_end)
             else:
-                st.write("Found " + str(len(segments)) + " subtitle lines")
-        if segments:
-            starts = choose_starts(segments, total, clip_length, clip_count)
+                starts = choose_highlight_starts(scores, total, clip_length, clip_count, t_start, t_end)
+                st.write(f"Found {len(starts)} highlight moments!")
+                for idx, s in enumerate(starts):
+                    st.write(f"Highlight {idx+1}: Starts at {int(s//60)}:{int(s%60):02d}")
         else:
-            starts = []
-            n = max(1, min(clip_count, int(total // clip_length)))
-            for i in range(n):
-                starts.append(i * clip_length)
-            if not starts:
-                starts = [0.0]
+            starts = choose_normal_starts(total, clip_length, clip_count, t_start, t_end)
+            st.write(f"Normal Mode: {len(starts)} evenly spaced clips")
         st.write("Making " + str(len(starts)) + " clips...")
         outs = []
         for i, s in enumerate(starts):
-            out = work / ("clip_" + str(i+1) + ".mp4")
-            st.write("Rendering clip " + str(i+1) + " / " + str(len(starts)))
-            render_clip(source, out, s, clip_length, segments, cfg, music)
+            out = work / ("clip_" + str(i + 1) + ".mp4")
+            st.write("Rendering clip " + str(i + 1) + " / " + str(len(starts)) + f" - Start: {int(s//60)}:{int(s%60):02d}")
+            render_clip(source, out, s, clip_length, cfg, music)
             if out.exists():
                 outs.append(out)
-        st.success("Done - " + str(len(outs)) + " Clips Ready")
+        st.success("Done - " + str(len(outs)) + " Clips Ready!")
         for i, o in enumerate(outs):
-            st.subheader("Clip " + str(i+1) + " - " + str(out_w) + "x" + str(out_h))
+            st.subheader("Clip " + str(i + 1) + " - " + str(out_w) + "x" + str(out_h) + " - " + effect)
             st.video(str(o))
             with open(o, "rb") as f:
-                st.download_button("Download Clip " + str(i+1), data=f.read(), file_name="clip_" + str(i+1) + "_" + str(out_w) + "x" + str(out_h) + ".mp4", mime="video/mp4", key="dl_" + str(i))
+                st.download_button("Download Clip " + str(i + 1), data=f.read(), file_name="clip_" + str(i + 1) + "_" + str(out_w) + "x" + str(out_h) + ".mp4", mime="video/mp4", key="dl_" + str(i))
     except Exception as e:
         st.error("Error: " + str(e))
-        
