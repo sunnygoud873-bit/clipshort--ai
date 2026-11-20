@@ -1,12 +1,12 @@
 import os
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["OMP_NUM_THREADS"]="1"
+os.environ["TOKENIZERS_PARALLELISM"]="false"
 import streamlit as st, subprocess, tempfile, shutil, re, gc, wave, requests
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 st.set_page_config(page_title="CLIPSHORT AI", page_icon="🎬", layout="wide")
-st.markdown("<h1>🎬 CLIPSHORT AI</h1><p>Highlight + Normal Clipping | YouTube / Drive / Upload | Fast</p>", unsafe_allow_html=True)
+st.markdown("<h1>🎬 CLIPSHORT AI</h1><p>Highlight + Normal | YouTube (Piped) + Cobalt (TikTok/Insta/X) + Drive + Upload</p>", unsafe_allow_html=True)
 if "preview_done" not in st.session_state: st.session_state.preview_done=False
 if "preview_bytes" not in st.session_state: st.session_state.preview_bytes=None
 
@@ -21,7 +21,7 @@ def has_audio(p):
     r=subprocess.run(["ffprobe","-v","error","-select_streams","a:0","-show_entries","stream=codec_type","-of","csv=p=0",str(p)],capture_output=True,text=True)
     return bool(r.stdout.strip())
 
-# ---------- DOWNLOAD ----------
+# ---------- DOWNLOAD: DRIVE ----------
 def get_drive_id(url):
     p=urlparse(url.strip()); m=re.search(r"/file/d/([A-Za-z0-9_-]+)",p.path)
     if m: return m.group(1)
@@ -37,6 +37,26 @@ def download_drive(url,folder):
     if not target.exists() or target.stat().st_size<10000: raise RuntimeError("Drive failed. Set Anyone with link -> Viewer")
     return target
 
+# ---------- DOWNLOAD: COBALT - TikTok / Insta / X / FB ----------
+COBALT_INSTANCES=["https://co.wuk.sh/","https://cobalt-backend.canine.tools/"]
+def download_via_cobalt(url,folder):
+    for base in COBALT_INSTANCES:
+        try:
+            r=requests.post(base,json={"url":url.strip(),"videoQuality":"720","filenameStyle":"basic"},headers={"Accept":"application/json","Content-Type":"application/json"},timeout=30)
+            if r.status_code!=200: continue
+            d=r.json(); vurl=d.get("url")
+            if not vurl: continue
+            target=folder/"cobalt_video.mp4"
+            with requests.get(vurl,stream=True,timeout=180) as dl:
+                dl.raise_for_status()
+                with open(target,"wb") as f:
+                    for c in dl.iter_content(chunk_size=1024*1024*2):
+                        if c: f.write(c)
+            if target.exists() and target.stat().st_size>10000: return target
+        except Exception as e: print("Cobalt fail",base,e); continue
+    raise RuntimeError("Cobalt failed. Try Drive/Upload. Note: Cobalt does NOT work for YouTube on cloud.")
+
+# ---------- DOWNLOAD: YOUTUBE via PIPED ----------
 def get_video_id(url):
     if "youtu.be/" in url: return url.split("youtu.be/")[-1].split("?")[0].split("&")[0]
     q=parse_qs(urlparse(url).query)
@@ -46,21 +66,18 @@ def get_video_id(url):
     m=re.search(r"/live/([A-Za-z0-9_-]+)",url)
     if m: return m.group(1)
     return None
-
-def _dl_file(video_url,folder):
-    target=folder/"youtube_video.mp4"
-    with requests.get(video_url,stream=True,timeout=180,headers={"User-Agent":"Mozilla/5.0"}) as dl:
+def _dl_file(vurl,folder,name="youtube_video.mp4"):
+    target=folder/name
+    with requests.get(vurl,stream=True,timeout=180,headers={"User-Agent":"Mozilla/5.0"}) as dl:
         dl.raise_for_status()
         with open(target,"wb") as f:
             for c in dl.iter_content(chunk_size=1024*1024*2):
                 if c: f.write(c)
     if target.exists() and target.stat().st_size>10000: return target
     raise RuntimeError("Empty file")
-
 def download_youtube(url,folder):
     vid=get_video_id(url.strip())
-    if not vid: raise RuntimeError("Invalid YouTube link. Use watch?v= / youtu.be / shorts link")
-    # 1. PIPED - Best for Streamlit, no 403
+    if not vid: raise RuntimeError("Invalid YouTube link. Use watch?v= / youtu.be / shorts")
     for host in ["https://pipedapi.kavin.rocks","https://pipedapi-libre.kavin.rocks","https://pipedapi.adminforge.de"]:
         try:
             r=requests.get(f"{host}/streams/{vid}",timeout=20)
@@ -71,7 +88,6 @@ def download_youtube(url,folder):
             cand=sorted(cand,key=lambda x: abs(int(str(x.get("quality","720")).replace("p","") or 720)-720))
             return _dl_file(cand[0]["url"],folder)
         except Exception as e: print("Piped fail",host,e); continue
-    # 2. INVIDIOUS - Backup
     for host in ["https://vid.puffyan.us","https://invidious.privacyredirect.com","https://iv.datura.network"]:
         try:
             r=requests.get(f"{host}/api/v1/videos/{vid}",timeout=20)
@@ -81,7 +97,6 @@ def download_youtube(url,folder):
             stms=sorted(stms,key=lambda x: 0 if x.get("itag")==22 else 1 if x.get("itag")==18 else 2)
             return _dl_file(stms[0]["url"],folder)
         except Exception as e: print("Invidious fail",host,e); continue
-    # 3. yt-dlp - Last try, pre-merged 18/22, mweb client
     try:
         import yt_dlp
         opts={"format":"18/22/best[ext=mp4]/best","outtmpl":str(folder/"youtube_video.%(ext)s"),"noplaylist":True,"quiet":True,"no_warnings":True,"retries":2,"socket_timeout":30,"extractor_args":{"youtube":{"player_client":["mweb","ios","tv"]}}}
@@ -91,7 +106,7 @@ def download_youtube(url,folder):
     except Exception as e: print("yt-dlp fail",e)
     raise RuntimeError("YouTube download failed. Try again in 1 min or use Drive/Upload.")
 
-# ---------- HIGHLIGHTS - UNLIMITED, NO 10 MIN LIMIT ----------
+# ---------- HIGHLIGHTS - UNLIMITED ----------
 def get_highlight_scores(video_path,total):
     try:
         import numpy as np
@@ -114,21 +129,19 @@ def get_highlight_scores(video_path,total):
         except: pass
         return sm
     except Exception as e: print("Highlight fail",e); return None
-
 def choose_highlight_starts(scores,total,length,count,ts,te):
     if scores is None: return None
     cands=[]; start=ts; step=2.0
     while start+length<=te:
-        s_idx=int(start); e_idx=int(min(start+length,len(scores)))
-        sc=sum(scores[s_idx:e_idx]) if e_idx>s_idx else 0
-        if e_idx>s_idx: sc+=max(scores[s_idx:e_idx])*2.0
+        si=int(start); ei=int(min(start+length,len(scores)))
+        sc=sum(scores[si:ei]) if ei>si else 0
+        if ei>si: sc+=max(scores[si:ei])*2.0
         cands.append((sc,start)); start+=step
     cands.sort(key=lambda x:x[0],reverse=True); sel=[]
     for _,s in cands:
         if all(abs(s-p)>=length*0.65 for p in sel): sel.append(s)
         if len(sel)>=count: break
     return sorted(sel) if sel else [ts]
-
 def choose_normal_starts(total,length,count,ts,te):
     avail=te-ts
     if avail<=length: return [ts]
@@ -145,7 +158,6 @@ def get_output_size(rl,resl):
     if bw<=bh: w=t; h=int(bh*(t/bw))
     else: h=t; w=int(bw*(t/bh))
     return w-(w%2), h-(h%2)
-
 def build_effect_filter(cfg,length):
     f=[]; eff=cfg["effect"]; b=cfg["brightness"]; c=cfg["contrast"]; s=cfg["saturation"]
     if eff=="Cinematic - Dark + Warm": b-=0.05; c+=0.15; s-=0.10; f.append("curves=r='0/0 0.5/0.45 1/1':g='0/0 0.5/0.5 1/1':b='0/0 0.5/0.55 1/0.95'")
@@ -160,7 +172,6 @@ def build_effect_filter(cfg,length):
     if cfg["fade_in"]: f.append("fade=t=in:st=0:d=0.8")
     if cfg["fade_out"]: f.append(f"fade=t=out:st={max(0,length-0.8):.1f}:d=0.8")
     return f
-
 def render_clip(source,output,start,length,cfg,music):
     args=["ffmpeg","-y","-threads","1","-ss",str(start),"-i",str(source)]
     if music: args+=["-stream_loop","-1","-i",str(music)]
@@ -174,10 +185,10 @@ def render_clip(source,output,start,length,cfg,music):
     elif sa: args+=["-af",at+f"volume={cfg['source_volume']}","-c:a","aac"]
     else: args+=["-an"]
     args+=["-movflags","+faststart",str(output)]; run_cmd(args); gc.collect()
-
 def get_source(work,stype,url,up):
     if stype=="Google Drive": return download_drive(url,work)
     if stype=="YouTube": return download_youtube(url,work)
+    if stype=="TikTok / Insta / X / FB (Cobalt)": return download_via_cobalt(url,work)
     suf=Path(up.name).suffix.lower()
     if suf not in [".mp4",".mov",".mkv",".webm",".avi",".m4v"]: suf=".mp4"
     src=work/("uploaded_video"+suf)
@@ -193,10 +204,11 @@ def get_music(work,up):
 
 # ---------- UI ----------
 st.subheader("📁 Video Source")
-source_type=st.radio("Choose source",["YouTube","Google Drive","Upload video"],horizontal=True,index=0)
+source_type=st.radio("Choose source",["YouTube","TikTok / Insta / X / FB (Cobalt)","Google Drive","Upload video"],horizontal=True,index=0)
 video_url=""; video_upload=None
 if source_type=="Google Drive": video_url=st.text_input("Drive link",placeholder="Paste Drive link"); st.caption("Drive: Anyone with link -> Viewer")
 elif source_type=="Upload video": video_upload=st.file_uploader("Upload video",type=["mp4","mov","mkv","webm","avi","m4v"])
+elif source_type=="TikTok / Insta / X / FB (Cobalt)": video_url=st.text_input("Link",placeholder="https://www.instagram.com/reel/... / tiktok..."); st.caption("Cobalt - Official co.wuk.sh - For TikTok/Insta/X/FB only")
 else: video_url=st.text_input("YouTube URL",placeholder="https://www.youtube.com/watch?v=..."); st.caption("YouTube via Piped - No 403, No Cobalt needed")
 
 st.subheader("🎵 Background Music (Optional)")
