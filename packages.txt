@@ -2,5 +2,4 @@ ffmpeg
 fonts-dejavu-core
 fonts-noto-core
 fonts-noto-extra
-fonts-noto-ui-core
 fontconfig
