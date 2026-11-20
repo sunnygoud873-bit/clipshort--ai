@@ -8,9 +8,9 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-# =========================================================
-# CLIPSHORT AI - SINGLE FILE STREAMLIT APPLICATION
-# =========================================================
+# =====================================================
+# CLIPSHORT AI - COMPLETE SINGLE FILE APPLICATION
+# =====================================================
 
 st.set_page_config(
     page_title="CLIPSHORT AI",
@@ -19,96 +19,111 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ---------------- PROFESSIONAL UI ----------------
+# =====================================================
+# PROFESSIONAL UI THEME
+# =====================================================
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
+    font-family: 'Inter', sans-serif !important;
 }
 
 .stApp {
-    background: #0b1020;
-    color: #f8fafc;
+    background: #0b1120;
+    color: #f1f5f9;
 }
 
 [data-testid="stSidebar"] {
     background: #111827;
+    border-right: 1px solid #26354c;
     min-width: 310px;
-    border-right: 1px solid #293650;
 }
 
 [data-testid="stSidebar"] * {
-    color: #f8fafc;
+    color: #f1f5f9;
+    font-family: 'Inter', sans-serif !important;
 }
 
 [data-testid="stSidebar"] h1,
 [data-testid="stSidebar"] h2,
 [data-testid="stSidebar"] h3 {
-    color: #b8a7ff;
-}
-
-[data-testid="stSidebar"] input {
-    color: white;
+    color: #a5b4fc !important;
+    font-weight: 700;
 }
 
 .block-container {
     max-width: 1350px;
-    padding-top: 1.8rem;
+    padding-top: 2rem;
 }
 
 .hero {
-    padding: 28px;
-    border-radius: 18px;
-    background: linear-gradient(120deg,#172b49,#34204d);
-    border: 1px solid #35476a;
-    margin-bottom: 24px;
+    padding: 32px;
+    border-radius: 20px;
+    background: linear-gradient(125deg,#172554,#312e81,#581c87);
+    border: 1px solid #4338ca;
+    margin-bottom: 25px;
 }
 
 .hero h1 {
-    font-size: 38px;
+    font-size: 40px;
     font-weight: 800;
+    letter-spacing: -1.5px;
+    color: #ffffff;
     margin: 0;
 }
 
 .hero p {
-    color: #c4cde0;
+    color: #c7d2fe;
+    font-size: 15px;
     margin-bottom: 0;
 }
 
 div.stButton > button,
 div.stDownloadButton > button {
-    background: linear-gradient(90deg,#6255e8,#984fe8);
+    background: linear-gradient(100deg,#6366f1,#9333ea);
     color: white;
-    border: 0;
-    border-radius: 10px;
+    border: none;
+    border-radius: 12px;
+    min-height: 48px;
     font-weight: 700;
-    min-height: 46px;
+}
+
+div.stButton > button:hover,
+div.stDownloadButton > button:hover {
+    border: 1px solid #c4b5fd;
+    color: white;
 }
 
 [data-testid="stMetric"] {
-    background: #151f33;
-    padding: 15px;
-    border-radius: 12px;
-    border: 1px solid #293650;
+    background: #172033;
+    border: 1px solid #334155;
+    border-radius: 14px;
+    padding: 16px;
 }
 
+[data-testid="stFileUploader"] {
+    background: #151f33;
+    border: 1px dashed #64748b;
+    border-radius: 14px;
+    padding: 10px;
+}
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
 <div class="hero">
 <h1>🎬 CLIPSHORT AI</h1>
-<p>AI Video Clipping Studio · Automatic Captions · Music · Shorts</p>
+<p>AI Video Clipping Studio · Automatic Subtitles · Music · Shorts</p>
 </div>
 """, unsafe_allow_html=True)
 
 
-# =========================================================
+# =====================================================
 # SYSTEM UTILITIES
-# =========================================================
+# =====================================================
 
 def run_command(args):
     result = subprocess.run(
@@ -116,11 +131,10 @@ def run_command(args):
         capture_output=True,
         text=True
     )
-
     if result.returncode != 0:
-        error = result.stderr or result.stdout
-        raise RuntimeError(error[-3000:])
-
+        raise RuntimeError(
+            (result.stderr or result.stdout)[-3000:]
+        )
     return result.stdout.strip()
 
 
@@ -132,37 +146,32 @@ def check_ffmpeg():
 
 
 def get_duration(path):
-    result = run_command([
-        "ffprobe",
-        "-v", "error",
+    value = run_command([
+        "ffprobe", "-v", "error",
         "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1",
         str(path)
     ])
-
-    return float(result)
+    return float(value)
 
 
 def has_audio(path):
     result = subprocess.run(
         [
-            "ffprobe",
-            "-v", "error",
+            "ffprobe", "-v", "error",
             "-select_streams", "a:0",
             "-show_entries", "stream=codec_type",
-            "-of", "csv=p=0",
-            str(path)
+            "-of", "csv=p=0", str(path)
         ],
         capture_output=True,
         text=True
     )
-
     return bool(result.stdout.strip())
 
 
-# =========================================================
-# GOOGLE DRIVE DOWNLOAD
-# =========================================================
+# =====================================================
+# GOOGLE DRIVE
+# =====================================================
 
 def get_drive_id(url):
     parsed = urlparse(url.strip())
@@ -180,7 +189,7 @@ def get_drive_id(url):
     if query.get("id"):
         return query["id"][0]
 
-    raise ValueError("Invalid Google Drive link.")
+    raise ValueError("Invalid Google Drive sharing link.")
 
 
 def download_drive(url, folder):
@@ -209,9 +218,9 @@ def download_drive(url, folder):
     return path
 
 
-# =========================================================
-# YOUTUBE DOWNLOAD
-# =========================================================
+# =====================================================
+# YOUTUBE
+# =====================================================
 
 def download_youtube(url, folder):
     import yt_dlp
@@ -232,33 +241,19 @@ def download_youtube(url, folder):
 
     if not files:
         raise RuntimeError(
-            "YouTube download failed. YouTube may block cloud servers. "
-            "Try uploading the video or using Google Drive."
+            "YouTube download failed. The platform may block "
+            "cloud downloads. Try uploading your video instead."
         )
 
     return files[0]
 
 
-# =========================================================
-# WHISPER + PYAV COMPATIBILITY
-# =========================================================
+# =====================================================
+# WHISPER MODEL
+# =====================================================
 
 @st.cache_resource
 def load_whisper(model_name):
-
-    import av
-
-    # Remove unsupported metadata_errors argument
-    # when older Faster-Whisper code calls av.open.
-
-    original_open = av.open
-
-    def compatible_open(*args, **kwargs):
-        kwargs.pop("metadata_errors", None)
-        return original_open(*args, **kwargs)
-
-    av.open = compatible_open
-
     from faster_whisper import WhisperModel
 
     return WhisperModel(
@@ -268,9 +263,9 @@ def load_whisper(model_name):
     )
 
 
-# =========================================================
-# SUBTITLE LANGUAGES
-# =========================================================
+# =====================================================
+# INDIAN LANGUAGE SUBTITLES
+# =====================================================
 
 LANGUAGE_CODES = {
     "Hindi": "hi",
@@ -287,12 +282,17 @@ LANGUAGE_CODES = {
 
 
 def transcribe_video(path, model_name, language):
-
     model = load_whisper(model_name)
 
     options = {
         "vad_filter": True,
-        "beam_size": 2
+        "beam_size": 5,
+        "temperature": 0.0,
+        "condition_on_previous_text": False,
+        "no_speech_threshold": 0.6,
+        "compression_ratio_threshold": 2.4,
+        "log_prob_threshold": -1.0,
+        "task": "transcribe"
     }
 
     if language == "English (Translate)":
@@ -302,46 +302,55 @@ def transcribe_video(path, model_name, language):
         options["task"] = "transcribe"
 
     else:
-        options["task"] = "transcribe"
         options["language"] = LANGUAGE_CODES[language]
+
+    if language == "Telugu":
+        options["initial_prompt"] = (
+            "తెలుగు భాషలో మాట్లాడిన మాటలను "
+            "సహజమైన తెలుగు లిపిలో రాయండి. "
+            "తెలుగు పదాలను ఇంగ్లీష్ అక్షరాలతో రాయకండి. "
+            "విన్న మాటలనే రాయండి."
+        )
 
     segments, info = model.transcribe(
         str(path),
         **options
     )
 
-    result = []
+    results = []
 
     for segment in segments:
-        text = segment.text.strip()
+        caption = segment.text.strip()
 
-        if text:
-            result.append({
-                "start": float(segment.start),
-                "end": float(segment.end),
-                "text": text
-            })
+        if not caption:
+            continue
 
-    return result
+        if segment.no_speech_prob > 0.85:
+            continue
+
+        results.append({
+            "start": float(segment.start),
+            "end": float(segment.end),
+            "text": caption
+        })
+
+    return results
 
 
-# =========================================================
-# AUTOMATIC CLIP SELECTION
-# =========================================================
+# =====================================================
+# CLIP SELECTION
+# =====================================================
 
-def choose_clip_starts(segments, total, clip_length, count):
-
-    if total <= clip_length:
+def choose_clip_starts(segments, total, length, count):
+    if total <= length:
         return [0.0]
 
-    step = max(2.0, min(clip_length / 5, 6.0))
-
+    step = max(2.0, min(length / 5, 6.0))
     candidates = []
     start = 0.0
 
-    while start + clip_length <= total:
-
-        end = start + clip_length
+    while start + length <= total:
+        end = start + length
 
         score = sum(
             max(
@@ -363,9 +372,8 @@ def choose_clip_starts(segments, total, clip_length, count):
     selected = []
 
     for score, start in candidates:
-
         if all(
-            abs(start - previous) >= clip_length * 0.65
+            abs(start - previous) >= length * 0.65
             for previous in selected
         ):
             selected.append(start)
@@ -376,12 +384,11 @@ def choose_clip_starts(segments, total, clip_length, count):
     return sorted(selected or [0.0])
 
 
-# =========================================================
+# =====================================================
 # SUBTITLE FORMATTING
-# =========================================================
+# =====================================================
 
 def ass_time(seconds):
-
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     remaining = seconds % 60
@@ -394,7 +401,6 @@ def ass_time(seconds):
 
 
 def ass_color(value):
-
     value = value.lstrip("#")
 
     if not re.fullmatch(r"[0-9a-fA-F]{6}", value):
@@ -414,7 +420,6 @@ def write_subtitles(
     clip_end,
     cfg
 ):
-
     alignment = {
         "Bottom": 2,
         "Middle": 5,
@@ -422,14 +427,8 @@ def write_subtitles(
     }[cfg["position"]]
 
     bold = -1 if cfg["bold"] else 0
-
     border_style = 3 if cfg["background"] else 1
-
-    outline = (
-        0 if cfg["background"]
-        else cfg["outline"]
-    )
-
+    outline = 0 if cfg["background"] else cfg["outline"]
     font = cfg["font"].replace(",", " ")
 
     rows = [
@@ -456,7 +455,6 @@ def write_subtitles(
     ]
 
     for segment in segments:
-
         start = max(segment["start"], clip_start)
         end = min(segment["end"], clip_end)
 
@@ -475,8 +473,8 @@ def write_subtitles(
             caption = caption.upper()
 
         rows.append(
-            f"Dialogue: 0,{ass_time(start - clip_start)},"
-            f"{ass_time(end - clip_start)},Default,,0,0,0,,{caption}"
+            f"Dialogue: 0,{ass_time(start-clip_start)},"
+            f"{ass_time(end-clip_start)},Default,,0,0,0,,{caption}"
         )
 
     subtitle_file.write_text(
@@ -486,21 +484,18 @@ def write_subtitles(
 
 
 def subtitle_filter_path(path):
-
     value = str(path.resolve()).replace("\\", "/")
 
-    value = (
+    return (
         value.replace(":", r"\:")
         .replace("'", r"\'")
         .replace(",", r"\,")
     )
 
-    return value
 
-
-# =========================================================
+# =====================================================
 # VIDEO RENDERING
-# =========================================================
+# =====================================================
 
 def render_clip(
     source,
@@ -511,10 +506,8 @@ def render_clip(
     cfg,
     music
 ):
-
     args = [
-        "ffmpeg",
-        "-y",
+        "ffmpeg", "-y",
         "-ss", str(start),
         "-i", str(source)
     ]
@@ -525,7 +518,7 @@ def render_clip(
             "-i", str(music)
         ]
 
-    video_filters = [
+    filters = [
         "scale=1080:1920:force_original_aspect_ratio=increase",
         "crop=1080:1920",
         "setsar=1",
@@ -535,7 +528,6 @@ def render_clip(
     subtitle_file = output.with_suffix(".ass")
 
     if cfg["subtitles"] and segments:
-
         write_subtitles(
             subtitle_file,
             segments,
@@ -544,25 +536,22 @@ def render_clip(
             cfg
         )
 
-        subtitle_path = subtitle_filter_path(subtitle_file)
-
-        video_filters.append(
-            f"ass='{subtitle_path}'"
+        filters.append(
+            "ass='" + subtitle_filter_path(subtitle_file) + "'"
         )
 
     args += [
         "-t", str(length),
-        "-vf", ",".join(video_filters),
+        "-vf", ",".join(filters),
         "-c:v", "libx264",
         "-preset", cfg["preset"],
         "-crf", str(cfg["crf"]),
         "-pix_fmt", "yuv420p"
     ]
 
-    source_has_audio = has_audio(source)
+    source_audio = has_audio(source)
 
-    if music and source_has_audio:
-
+    if music and source_audio:
         args += [
             "-filter_complex",
             (
@@ -576,7 +565,6 @@ def render_clip(
         ]
 
     elif music:
-
         args += [
             "-map", "0:v:0",
             "-map", "1:a:0",
@@ -584,8 +572,7 @@ def render_clip(
             "-c:a", "aac"
         ]
 
-    elif source_has_audio:
-
+    elif source_audio:
         args += [
             "-af", f"volume={cfg['source_volume']}",
             "-c:a", "aac"
@@ -605,12 +592,11 @@ def render_clip(
         subtitle_file.unlink()
 
 
-# =========================================================
-# SIDEBAR - ALL SETTINGS
-# =========================================================
+# =====================================================
+# SIDEBAR SETTINGS
+# =====================================================
 
 with st.sidebar:
-
     st.title("⚙️ EDIT STUDIO")
 
     st.header("🎬 Clip Settings")
@@ -626,7 +612,6 @@ with st.sidebar:
     )
 
     st.divider()
-
     st.header("💬 Subtitle Settings")
 
     subtitles = st.toggle(
@@ -654,12 +639,12 @@ with st.sidebar:
     )
 
     st.divider()
-
     st.header("🔤 Font Settings")
 
     font = st.selectbox(
         "Font family",
         [
+            "Noto Sans",
             "Arial",
             "DejaVu Sans",
             "Liberation Sans",
@@ -677,29 +662,21 @@ with st.sidebar:
     )
 
     bold = st.toggle("Bold font", True)
-
-    uppercase = st.toggle(
-        "Uppercase text",
-        False
-    )
+    uppercase = st.toggle("Uppercase text", False)
 
     st.divider()
-
     st.header("🎨 Caption Appearance")
 
     text_color = st.color_picker(
-        "Text colour",
-        "#FFFFFF"
+        "Text colour", "#FFFFFF"
     )
 
     outline_color = st.color_picker(
-        "Outline colour",
-        "#000000"
+        "Outline colour", "#000000"
     )
 
     outline = st.slider(
-        "Outline thickness",
-        0, 10, 3
+        "Outline thickness", 0, 10, 3
     )
 
     position = st.selectbox(
@@ -708,22 +685,18 @@ with st.sidebar:
     )
 
     background = st.toggle(
-        "Caption background",
-        False
+        "Caption background", False
     )
 
     background_color = st.color_picker(
-        "Caption background colour",
-        "#151515"
+        "Caption background colour", "#151515"
     )
 
     shadow = st.slider(
-        "Caption shadow",
-        0, 5, 2
+        "Caption shadow", 0, 5, 2
     )
 
     st.divider()
-
     st.header("🎵 Audio Settings")
 
     source_volume = st.slider(
@@ -737,7 +710,6 @@ with st.sidebar:
     )
 
     st.divider()
-
     st.header("⚡ Export Settings")
 
     quality = st.selectbox(
@@ -748,14 +720,14 @@ with st.sidebar:
 
     model_name = st.selectbox(
         "Subtitle AI model",
-        ["tiny", "base", "small"],
+        ["small", "base", "tiny", "medium"],
         index=0
     )
 
 
-# =========================================================
-# SETTINGS CONFIGURATION
-# =========================================================
+# =====================================================
+# CONFIGURATION
+# =====================================================
 
 cfg = {
     "subtitles": subtitles,
@@ -785,23 +757,18 @@ cfg = {
 }
 
 
-# =========================================================
-# MAIN PAGE - VIDEO INPUT
-# =========================================================
+# =====================================================
+# VIDEO SOURCE
+# =====================================================
 
 video_col, music_col = st.columns([1.25, 1])
 
 with video_col:
-
     st.subheader("📁 Video Source")
 
     source_type = st.radio(
-        "Choose your video source",
-        [
-            "Google Drive",
-            "Upload video",
-            "YouTube"
-        ],
+        "Choose source",
+        ["Google Drive", "Upload video", "YouTube"],
         horizontal=True
     )
 
@@ -809,32 +776,22 @@ with video_col:
     video_upload = None
 
     if source_type == "Google Drive":
-
         video_url = st.text_input(
-            "Google Drive link",
-            placeholder="Paste your Drive sharing link"
+            "Google Drive sharing link",
+            placeholder="Paste your Drive link"
         )
 
         st.caption(
-            "Set access to Anyone with the link - Viewer."
+            "Google Drive: Anyone with the link → Viewer."
         )
 
     elif source_type == "Upload video":
-
         video_upload = st.file_uploader(
             "Upload video",
-            type=[
-                "mp4",
-                "mov",
-                "mkv",
-                "webm",
-                "avi",
-                "m4v"
-            ]
+            type=["mp4", "mov", "mkv", "webm", "avi", "m4v"]
         )
 
     else:
-
         video_url = st.text_input(
             "YouTube URL",
             placeholder="Paste YouTube video link"
@@ -842,29 +799,19 @@ with video_col:
 
 
 with music_col:
-
     st.subheader("🎵 Background Music")
 
     music_upload = st.file_uploader(
         "Upload music (optional)",
-        type=[
-            "mp3",
-            "wav",
-            "m4a",
-            "aac",
-            "ogg",
-            "flac"
-        ]
+        type=["mp3", "wav", "m4a", "aac", "ogg", "flac"]
     )
 
-    st.caption(
-        "Use music you have permission to use."
-    )
+    st.caption("Use music you have permission to use.")
 
 
-# =========================================================
+# =====================================================
 # GENERATE CLIPS
-# =========================================================
+# =====================================================
 
 st.subheader("🚀 Generate Your Clips")
 
@@ -875,17 +822,16 @@ if st.button(
 ):
 
     if source_type == "Upload video" and video_upload is None:
-        st.error("Please upload a video first.")
+        st.error("Please upload a video.")
         st.stop()
 
     if source_type != "Upload video":
-
         if not video_url.strip().startswith(("https://", "http://")):
             st.error("Please enter a valid video link.")
             st.stop()
 
     if not check_ffmpeg():
-        st.error("FFmpeg or FFprobe is missing. Check your packages.txt.")
+        st.error("FFmpeg or FFprobe is missing. Check packages.txt.")
         st.stop()
 
     work = Path(
@@ -893,34 +839,22 @@ if st.button(
     )
 
     try:
-
         with st.status(
             "Processing your video...",
             expanded=True
         ) as status:
 
-            # DOWNLOAD VIDEO
+            # DOWNLOAD SOURCE
 
             if source_type == "Google Drive":
-
                 st.write("Downloading Google Drive video...")
-
-                source = download_drive(
-                    video_url,
-                    work
-                )
+                source = download_drive(video_url, work)
 
             elif source_type == "YouTube":
-
                 st.write("Downloading YouTube video...")
-
-                source = download_youtube(
-                    video_url,
-                    work
-                )
+                source = download_youtube(video_url, work)
 
             else:
-
                 source = work / (
                     "uploaded_video"
                     + Path(video_upload.name).suffix.lower()
@@ -938,7 +872,6 @@ if st.button(
             music = None
 
             if music_upload is not None:
-
                 music = work / (
                     "background_music"
                     + Path(music_upload.name).suffix.lower()
@@ -951,7 +884,7 @@ if st.button(
                         length=1024 * 1024
                     )
 
-            # VIDEO DURATION
+            # DURATION
 
             total = get_duration(source)
 
@@ -965,9 +898,8 @@ if st.button(
             # SUBTITLES
 
             if subtitles:
-
                 st.write(
-                    f"Generating subtitles: {language}"
+                    f"Generating subtitles in {language}..."
                 )
 
                 segments = transcribe_video(
@@ -975,11 +907,10 @@ if st.button(
                     model_name,
                     language
                 )
-
             else:
                 segments = []
 
-            # SELECT CLIPS
+            # CLIP SELECTION
 
             starts = choose_clip_starts(
                 segments,
@@ -993,10 +924,9 @@ if st.button(
 
             progress = st.progress(0)
 
-            # RENDER CLIPS
+            # RENDER
 
             for index, start in enumerate(starts, 1):
-
                 length = min(
                     float(clip_length),
                     total - start
@@ -1019,11 +949,9 @@ if st.button(
                     music
                 )
 
-                progress.progress(
-                    index / len(starts)
-                )
+                progress.progress(index / len(starts))
 
-            # CREATE ZIP
+            # ZIP DOWNLOAD
 
             clips = sorted(
                 output_dir.glob("*.mp4")
@@ -1049,7 +977,7 @@ if st.button(
             zip_data = zip_path.read_bytes()
 
             status.update(
-                label="Video processing completed!",
+                label="Processing completed!",
                 state="complete"
             )
 
@@ -1072,35 +1000,30 @@ if st.button(
         )
 
         for index, clip in enumerate(clips):
-
             with columns[index % len(columns)]:
-
                 st.caption(clip.name)
                 st.video(str(clip))
 
     except Exception as error:
-
-        st.error(
-            f"Processing error: {error}"
-        )
+        st.error(f"Processing error: {error}")
 
         st.info(
-            "Check the video link, Drive sharing permissions, "
-            "available server storage and FFmpeg. "
-            "Try Whisper tiny for faster processing."
+            "Check video permissions, FFmpeg, server storage "
+            "and available memory. Try a shorter video or "
+            "the tiny subtitle model if processing is too slow."
         )
 
     finally:
-        # Files remain available for previews in this session.
+        # Keep files available for previews in this session.
         pass
 
 
-# =========================================================
+# =====================================================
 # FOOTER
-# =========================================================
+# =====================================================
 
 st.divider()
 
 st.caption(
-    "CLIPSHORT AI | Streamlit Video Editing Studio"
+    "CLIPSHORT AI · Professional Video Editing Studio"
 )
