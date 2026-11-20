@@ -1,8 +1,10 @@
 streamlit
 numpy
-moviepy==1.0.3
 Pillow
 imageio
 imageio-ffmpeg
 faster-whisper
+requests
+gdown
+yt-dlp
 setuptools
