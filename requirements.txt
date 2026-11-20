@@ -1,8 +1,1 @@
 streamlit
-yt-dlp
-gdown
-requests
-faster-whisper==1.0.3
-ctranslate2==4.4.0
-huggingface-hub==0.27.1
-av==11.0.0
