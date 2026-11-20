@@ -129,11 +129,7 @@ def download_drive(url, folder):
         raise RuntimeError("Drive failed. Set Anyone with link to Viewer")
     return target
 
-COBALT_INSTANCES = [
-    "https://co.wuk.sh/",
-    "https://cobalt-backend.canine.tools/",
-    "https://cobalt-api.kavin.rocks/"
-]
+COBALT_INSTANCES = ["https://co.wuk.sh/", "https://cobalt-backend.canine.tools/", "https://cobalt-api.kavin.rocks/"]
 
 def download_from_url(vurl, folder, name):
     target = folder / name
@@ -184,7 +180,7 @@ def download_via_cobalt_quality(url, folder, quality, filename="cobalt_video.mp4
 def download_youtube(url, folder, want_mp3=False, quality="Auto"):
     clean_url, vid = clean_yt_url(url)
     if not vid:
-        raise RuntimeError("Invalid YouTube link. Paste youtube / youtu.be / sosyoutube link")
+        raise RuntimeError("Invalid YouTube link")
     if quality == "Auto":
         q_list = ["1080", "720", "480", "360", "240", "144"]
     else:
@@ -209,7 +205,12 @@ def download_youtube(url, folder, want_mp3=False, quality="Auto"):
                     if not mp4s:
                         mp4s = fmts
                     target_h = int(q_list[0]) if q_list[0].isdigit() else 720
-                    mp4s = sorted(mp4s, key=lambda x: abs(int(x.get("height", 720)) - target_h))
+                    def hkey(x):
+                        try:
+                            return abs(int(x.get("height", 720)) - target_h)
+                        except:
+                            return 9999
+                    mp4s = sorted(mp4s, key=hkey)
                     return download_from_url(mp4s[0]["url"], folder, "youtube_video.mp4")
     except Exception as e:
         print("Lemnos fail", e)
@@ -494,20 +495,21 @@ def render_clip(source, output, start, length, cfg, music):
         fl.append(f"setpts={1.0 / cfg['speed']:.3f}*PTS")
     fl = fl + build_effect_filter(cfg, length)
     fl.append("fps=30")
-    args = args + ["-t", str(length), "-vf", ",".join(fl), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-threads", "1", "-pix_fmt", "yuv420p"]
+    vf = ",".join(fl)
     sa = has_audio(source)
-    if cfg["speed"] != 1.0:
-        at = f"atempo={cfg['speed']:.2f},"
-    else:
-        at = ""
     if music and sa:
-        args = args + ["-filter_complex", f"[0:a]{at}volume={cfg['source_volume']}[a0];[1:a]volume={cfg['music_volume']}[a1];[a0][a1]amix=inputs=2:duration=first[aout]", "-map", "0:v:0", "-map", "[aout]", "-c:a", "aac"]
-    elif music:
-        args = args + ["-map", "0:v:0", "-map", "1:a:0", "-af", f"volume={cfg['music_volume']}", "-c:a", "aac"]
-    elif sa:
-        args = args + ["-af", at + f"volume={cfg['source_volume']}", "-c:a", "aac"]
+        at = f"atempo={cfg['speed']:.2f}," if cfg["speed"] != 1.0 else ""
+        fc = f"[0:v]{vf}[vout];[0:a]{at}volume={cfg['source_volume']}[a0];[1:a]volume={cfg['music_volume']}[a1];[a0][a1]amix=inputs=2:duration=first[aout]"
+        args = args + ["-t", str(length), "-filter_complex", fc, "-map", "[vout]", "-map", "[aout]", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-c:a", "aac", "-pix_fmt", "yuv420p"]
     else:
-        args = args + ["-an"]
+        args = args + ["-t", str(length), "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p"]
+        if music:
+            args = args + ["-map", "0:v:0", "-map", "1:a:0", "-af", f"volume={cfg['music_volume']}", "-c:a", "aac"]
+        elif sa:
+            at = f"atempo={cfg['speed']:.2f}," if cfg["speed"] != 1.0 else ""
+            args = args + ["-af", at + f"volume={cfg['source_volume']}", "-c:a", "aac"]
+        else:
+            args = args + ["-an"]
     args = args + ["-movflags", "+faststart", str(output)]
     run_cmd(args)
     gc.collect()
@@ -590,7 +592,7 @@ if main_mode == "CLIPPER":
         elif source_type == "TikTok / Insta / X / FB (Cobalt)":
             video_url = st.text_input("Link", placeholder="https://www.instagram.com/reel/...", key="clip_cobalt_final")
         else:
-            video_url = st.text_input("YouTube URL", placeholder="Paste any YouTube link - youtube / youtu.be / sosyoutube", key="clip_yt_final")
+            video_url = st.text_input("YouTube URL", placeholder="Paste any YouTube link", key="clip_yt_final")
         music_upload = st.file_uploader("Background Music (Optional)", type=["mp3", "wav", "m4a", "aac", "ogg", "flac"], key="clip_music_final")
         st.subheader("Step 1: Preview")
         if st.button("GENERATE PREVIEW - 5 Sec", use_container_width=True, key="clip_prev_final"):
@@ -608,10 +610,7 @@ if main_mode == "CLIPPER":
                 st.write("Making Preview...")
                 src = get_source(work, source_type, video_url, video_upload)
                 mus = get_music(work, music_upload)
-                if use_trim:
-                    p_start = trim_start
-                else:
-                    p_start = 0.0
+                p_start = trim_start if use_trim else 0.0
                 p_out = work / "preview.mp4"
                 render_clip(src, p_out, p_start, 5, cfg, mus)
                 with open(p_out, "rb") as f:
@@ -640,14 +639,8 @@ if main_mode == "CLIPPER":
                     st.error("Could not read video duration")
                     st.stop()
                 st.write(f"Video: {round(total, 1)} sec")
-                if use_trim:
-                    t_start = trim_start
-                else:
-                    t_start = 0.0
-                if use_trim and trim_end:
-                    t_end = min(trim_end, total)
-                else:
-                    t_end = total
+                t_start = trim_start if use_trim else 0.0
+                t_end = min(trim_end, total) if use_trim and trim_end else total
                 if t_end <= t_start:
                     st.error("Trim End must be greater than Start")
                     st.stop()
@@ -677,7 +670,8 @@ if main_mode == "CLIPPER":
                     st.subheader(f"Clip {i + 1} - {out_w}x{out_h}")
                     st.video(str(o))
                     with open(o, "rb") as f:
-                        st.download_button(f"Download Clip {i + 1}", f, file_name=f"clip_{i + 1}.mp4", mime="video/mp4", key=f"clip_dl_final_{i}")
+                        data = f.read()
+                    st.download_button(f"Download Clip {i + 1}", data, file_name=f"clip_{i + 1}.mp4", mime="video/mp4", key=f"clip_dl_final_{i}")
             except Exception as e:
                 st.error("Error: " + str(e))
 
@@ -701,12 +695,14 @@ if main_mode == "DOWNLOADER":
                     st.success("YouTube MP3 Done!")
                     st.audio(str(src))
                     with open(src, "rb") as f:
-                        st.download_button("SAVE MP3 TO PHONE - YouTube", f, file_name=src.name, mime="audio/mp3", key="dl_yt_save_mp3_final")
+                        data = f.read()
+                    st.download_button("SAVE MP3 TO PHONE - YouTube", data, file_name=src.name, mime="audio/mp3", key="dl_yt_save_mp3_final")
                 else:
                     st.success(f"YouTube Video Done! - {yt_quality}")
                     st.video(str(src))
                     with open(src, "rb") as f:
-                        st.download_button("SAVE VIDEO TO PHONE - YouTube", f, file_name=src.name, mime=get_mime(src), key="dl_yt_save_final")
+                        data = f.read()
+                    st.download_button("SAVE VIDEO TO PHONE - YouTube", data, file_name=src.name, mime=get_mime(src), key="dl_yt_save_final")
             except Exception as e:
                 st.error("Download Failed: " + str(e))
     st.divider()
@@ -727,16 +723,19 @@ if main_mode == "DOWNLOADER":
                     st.success("Instagram MP3 Done!")
                     st.audio(str(src))
                     with open(src, "rb") as f:
-                        st.download_button("SAVE MP3 TO PHONE - Instagram", f, file_name=src.name, mime="audio/mp3", key="dl_insta_save_mp3_final")
+                        data = f.read()
+                    st.download_button("SAVE MP3 TO PHONE - Instagram", data, file_name=src.name, mime="audio/mp3", key="dl_insta_save_mp3_final")
                 elif src.suffix.lower() in [".jpg", ".png", ".webp"]:
                     st.image(str(src))
                     with open(src, "rb") as f:
-                        st.download_button("SAVE IMAGE", f, file_name=src.name, mime=get_mime(src), key="dl_insta_img_final")
+                        data = f.read()
+                    st.download_button("SAVE IMAGE", data, file_name=src.name, mime=get_mime(src), key="dl_insta_img_final")
                 else:
                     st.success("Instagram Video Done!")
                     st.video(str(src))
                     with open(src, "rb") as f:
-                        st.download_button("SAVE VIDEO TO PHONE - Instagram", f, file_name=src.name, mime=get_mime(src), key="dl_insta_save_final")
+                        data = f.read()
+                    st.download_button("SAVE VIDEO TO PHONE - Instagram", data, file_name=src.name, mime=get_mime(src), key="dl_insta_save_final")
             except Exception as e:
                 st.error("Download Failed: " + str(e))
     st.info("Tip: Any YouTube link works - sosyoutube / ssyoutube / youtu.be auto converts. Insta: Clean link https://www.instagram.com/reel/Dfqu4ikT61P/")
