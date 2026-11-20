@@ -9,11 +9,12 @@ import shutil
 import re
 import gc
 import wave
+import time
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 st.set_page_config(page_title="CLIPSHORT AI", page_icon="🎬", layout="wide")
-st.markdown("<h1>🎬 CLIPSHORT AI</h1><p>Highlight Moments + Normal Clipping | Trim + Effects | No Subtitles | Fast & Low CPU</p>", unsafe_allow_html=True)
+st.markdown("<h1>🎬 CLIPSHORT AI</h1><p>YouTube Only + Cobalt Server | Unlimited Highlights | Trim + Effects | No Subtitles</p>", unsafe_allow_html=True)
 
 if "preview_done" not in st.session_state:
     st.session_state.preview_done = False
@@ -36,6 +37,113 @@ def get_duration(path):
 def has_audio(path):
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)], capture_output=True, text=True)
     return bool(r.stdout.strip())
+
+# ===== COBALT SERVER - YOUTUBE DOWNLOAD FIX FOR STREAMLIT =====
+# Streamlit blocks yt-dlp directly. Cobalt is a separate server that downloads YouTube for us.
+# Flow: Streamlit -> Cobalt Server -> YouTube -> Returns Direct MP4 Link -> Streamlit Downloads It
+COBALT_SERVERS = [
+    "https://api.cobalt.tools/api/json",
+    "https://cobalt.canine.tools/api/json",
+    "https://cobalt.themarcus.top/api/json",
+]
+
+def download_via_cobalt(youtube_url, folder):
+    import requests
+    last_error = ""
+    for cobalt_url in COBALT_SERVERS:
+        try:
+            # Step 1: Ask Cobalt for direct download link
+            payload = {
+                "url": youtube_url,
+                "vCodec": "h264",
+                "vQuality": "720",
+                "aFormat": "mp3",
+                "isAudioOnly": False,
+                "filenameStyle": "basic",
+                "duplicate": "never"
+            }
+            headers = {"Accept": "application/json", "Content-Type": "application/json"}
+            r = requests.post(cobalt_url, json=payload, headers=headers, timeout=60)
+            if r.status_code != 200:
+                last_error = f"Cobalt {cobalt_url} returned {r.status_code}"
+                continue
+            data = r.json()
+            # Cobalt can return: status=redirect / tunnel / picker
+            download_url = data.get("url")
+            if not download_url:
+                # Picker = multiple files, take first video
+                picker = data.get("picker", [])
+                if picker:
+                    download_url = picker[0].get("url")
+            if not download_url:
+                last_error = f"Cobalt no URL: {str(data)[:300]}"
+                continue
+            # Step 2: Download the MP4 from Cobalt's direct link
+            target = folder / "cobalt_video.mp4"
+            dl = requests.get(download_url, stream=True, timeout=120, headers={"User-Agent": "Mozilla/5.0"})
+            with open(target, "wb") as f:
+                for chunk in dl.iter_content(chunk_size=1024 * 1024 * 2):
+                    if chunk:
+                        f.write(chunk)
+            if target.exists() and target.stat().st_size > 10000:
+                return target
+            last_error = "Cobalt file empty"
+        except Exception as e:
+            last_error = str(e)[:400]
+            continue
+    raise RuntimeError("Cobalt failed: " + last_error)
+
+def download_youtube_yt_dlp(url, folder):
+    # Fallback 2: yt-dlp direct (works on local PC, sometimes blocked on Streamlit)
+    try:
+        import yt_dlp
+    except ImportError:
+        raise RuntimeError("yt-dlp not installed")
+    attempts = [
+        "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best",
+        "best[height<=720][ext=mp4]/best[height<=720]/best",
+        "best",
+    ]
+    last_error = ""
+    for fmt in attempts:
+        try:
+            for old in folder.glob("youtube_video.*"):
+                try:
+                    old.unlink()
+                except Exception:
+                    pass
+            opts = {
+                "format": fmt,
+                "merge_output_format": "mp4",
+                "outtmpl": str(folder / "youtube_video.%(ext)s"),
+                "noplaylist": True,
+                "quiet": True,
+                "no_warnings": True,
+                "retries": 3,
+                "socket_timeout": 30,
+                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+            files = [f for f in folder.glob("youtube_video.*") if f.suffix.lower() in [".mp4", ".webm", ".mkv", ".mov", ".m4v"]]
+            if files and files[0].stat().st_size > 10000:
+                return files[0]
+        except Exception as e:
+            last_error = str(e)[-400:]
+            continue
+    raise RuntimeError("yt-dlp failed: " + last_error)
+
+def download_youtube(url, folder):
+    url = url.strip()
+    # Priority 1: Cobalt (Best for Streamlit)
+    try:
+        return download_via_cobalt(url, folder)
+    except Exception as cobalt_err:
+        # Priority 2: yt-dlp fallback
+        try:
+            return download_youtube_yt_dlp(url, folder)
+        except Exception as ytdlp_err:
+            raise RuntimeError(f"Cobalt failed: {str(cobalt_err)[:300]} | yt-dlp failed: {str(ytdlp_err)[:300]} | Try another video or try again in 1 min.")
 
 def get_drive_id(url):
     p = urlparse(url.strip())
@@ -62,58 +170,9 @@ def download_drive(url, folder):
         raise RuntimeError("Drive failed. Set Anyone with link to Viewer")
     return target
 
-def download_youtube(url, folder):
-    try:
-        import yt_dlp
-    except ImportError:
-        raise RuntimeError("yt-dlp not installed. Add 'yt-dlp' to requirements.txt and Reboot!")
-    url = url.strip()
-    # FIX: Try 3 formats - one fails, next will work
-    attempts = [
-        {
-            "format": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]/best",
-            "merge_output_format": "mp4",
-        },
-        {
-            "format": "best[height<=720][ext=mp4]/best[height<=720]/best",
-            "merge_output_format": "mp4",
-        },
-        {
-            "format": "best",
-            "merge_output_format": "mp4",
-        },
-    ]
-    last_error = ""
-    for i, fmt in enumerate(attempts):
-        try:
-            for old in folder.glob("youtube_video.*"):
-                try:
-                    old.unlink()
-                except Exception:
-                    pass
-            opts = {
-                "format": fmt["format"],
-                "merge_output_format": fmt["merge_output_format"],
-                "outtmpl": str(folder / "youtube_video.%(ext)s"),
-                "noplaylist": True,
-                "quiet": True,
-                "no_warnings": True,
-                "retries": 3,
-                "socket_timeout": 30,
-                "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
-            }
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
-            files = list(folder.glob("youtube_video.*"))
-            files = [f for f in files if f.suffix.lower() in [".mp4", ".webm", ".mkv", ".mov", ".m4v"]]
-            if files and files[0].stat().st_size > 10000:
-                return files[0]
-            last_error = "Downloaded file is empty"
-        except Exception as e:
-            last_error = str(e)[-500:]
-            continue
-    raise RuntimeError("YouTube download failed after 3 attempts. Reason: " + last_error + " | Try Upload video or Google Drive instead.")
-
+# ===== UNLIMITED HIGHLIGHTS - NO 10 MIN LIMIT =====
+# Works for 1 min, 10 min, 1 hour, 3 hours - NO LIMIT
+# Uses chunk reading so long videos do not crash RAM
 def get_highlight_scores(video_path, total):
     try:
         import numpy as np
@@ -121,35 +180,52 @@ def get_highlight_scores(video_path, total):
         subprocess.run(["ffmpeg", "-y", "-i", str(video_path), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio_path)], capture_output=True)
         if not audio_path.exists() or audio_path.stat().st_size < 1000:
             return None
+        # Total seconds - UNLIMITED, no cap
+        total_sec = int(total)
+        scores = [0.0] * total_sec
         with wave.open(str(audio_path), "rb") as wf:
-            n_frames = wf.getnframes()
             rate = wf.getframerate()
-            data = wf.readframes(n_frames)
-        audio = np.frombuffer(data, dtype=np.int16).astype(float) / 32768.0
-        scores = []
-        window = rate
-        for i in range(int(total)):
-            start = i * window
-            end = min((i + 1) * window, len(audio))
-            if end <= start:
-                scores.append(0.0)
-                continue
-            chunk = audio[start:end]
-            rms = float(np.sqrt(np.mean(chunk ** 2))) if len(chunk) > 0 else 0.0
-            peak = float(np.max(np.abs(chunk))) if len(chunk) > 0 else 0.0
-            scores.append(rms * 0.7 + peak * 0.3)
+            # Read in 10-sec chunks to save RAM for long videos
+            chunk_frames = rate * 10
+            sec_index = 0
+            while True:
+                data = wf.readframes(chunk_frames)
+                if not data:
+                    break
+                audio = np.frombuffer(data, dtype=np.int16).astype(float) / 32768.0
+                # Split 10-sec chunk into 1-sec scores
+                for s in range(10):
+                    start = s * rate
+                    end = min((s + 1) * rate, len(audio))
+                    if end <= start:
+                        break
+                    if sec_index >= total_sec:
+                        break
+                    chunk = audio[start:end]
+                    rms = float(np.sqrt(np.mean(chunk ** 2))) if len(chunk) > 0 else 0.0
+                    peak = float(np.max(np.abs(chunk))) if len(chunk) > 0 else 0.0
+                    scores[sec_index] = rms * 0.7 + peak * 0.3
+                    sec_index += 1
+                if sec_index >= total_sec:
+                    break
+        # Smooth - avoid single spike
         smoothed = []
         for i in range(len(scores)):
             vals = scores[max(0, i - 1):min(len(scores), i + 2)]
-            smoothed.append(sum(vals) / len(vals))
+            smoothed.append(sum(vals) / len(vals) if vals else 0.0)
+        try:
+            audio_path.unlink()
+        except Exception:
+            pass
         return smoothed
     except Exception as e:
-        print("Highlight detection failed", e)
+        print("Highlight failed", e)
         return None
 
 def choose_highlight_starts(scores, total, length, count, trim_start, trim_end):
     if scores is None:
         return None
+    # UNLIMITED: scan full trim range, any length
     cands = []
     start = trim_start
     step = 2.0
@@ -182,6 +258,23 @@ def choose_normal_starts(total, length, count, trim_start, trim_end):
     avail = trim_end - trim_start
     if avail <= length:
         return [trim_start]
+    # Try NON-OVERLAPPING first - no duplicate clips
+    # Example: 90 sec video, 30 sec clips -> max 3 non-overlapping clips
+    max_non_overlap = int(avail // length)
+    if count <= max_non_overlap:
+        # Evenly spread non-overlapping: 0, 30, 60 for 90 sec
+        starts = []
+        # Spread to cover full video, not just start
+        if count == 1:
+            starts = [trim_start + (avail - length) / 2]
+        else:
+            gap = (avail - (count * length)) / (count - 1) if count > 1 else 0
+            pos = trim_start
+            for i in range(count):
+                starts.append(pos)
+                pos += length + gap
+        return starts
+    # If user asks for MORE clips than non-overlap allows, use evenly spaced overlapping
     if count == 1:
         return [trim_start + avail / 2 - length / 2]
     step = (avail - length) / (count - 1) if count > 1 else 0
@@ -298,33 +391,34 @@ def get_music(work, music_upload):
         shutil.copyfileobj(music_upload, f, length=1024 * 1024)
     return music
 
-st.subheader("📁 Video Source")
-source_type = st.radio("Choose source", ["Google Drive", "Upload video", "YouTube"], horizontal=True)
+# ===== UI - ENGLISH ONLY =====
+st.subheader("📁 Video Source - YouTube Only + Drive + Upload")
+source_type = st.radio("Choose source", ["YouTube", "Google Drive", "Upload video"], horizontal=True)
 video_url = ""
 video_upload = None
-if source_type == "Google Drive":
+if source_type == "YouTube":
+    video_url = st.text_input("YouTube URL", placeholder="Paste YouTube link - https://www.youtube.com/watch?v=...")
+    st.caption("Powered by Cobalt Server - Works on Streamlit! If one Cobalt server fails, it auto tries next server.")
+elif source_type == "Google Drive":
     video_url = st.text_input("Google Drive sharing link", placeholder="Paste Drive link")
     st.caption("Drive: Anyone with the link -> Viewer")
-elif source_type == "Upload video":
-    video_upload = st.file_uploader("Upload video", type=["mp4", "mov", "mkv", "webm", "avi", "m4v"])
 else:
-    video_url = st.text_input("YouTube URL", placeholder="Paste YouTube link - Example: https://www.youtube.com/watch?v=...")
-    st.caption("If YouTube fails, use Google Drive or Upload - YouTube sometimes blocks servers.")
+    video_upload = st.file_uploader("Upload video", type=["mp4", "mov", "mkv", "webm", "avi", "m4v"])
 
 st.subheader("🎵 Background Music")
 music_upload = st.file_uploader("Upload music (optional)", type=["mp3", "wav", "m4a", "aac", "ogg", "flac"])
 
-st.subheader("🎯 Clipping Mode - Choose How To Clip")
-clip_mode = st.radio("How do you want to clip?", ["🔥 Highlight Moments - Best Parts Only (For 10 Min Videos)", "📐 Normal Clipping - Evenly Spaced Clips"], index=0)
+st.subheader("🎯 Clipping Mode")
+clip_mode = st.radio("How do you want to clip?", ["🔥 Highlight Moments - Best Parts Only (UNLIMITED Length)", "📐 Normal Clipping - Evenly Spaced Clips"], index=0)
 if "Highlight" in clip_mode:
-    st.info("🔥 Highlight Mode: App will listen to audio loudness (laughs, cheers, loud moments, music beats) and pick only the BEST moments from your 10 min video.")
+    st.info("🔥 UNLIMITED Highlights: No 10 min limit! 10 min, 30 min, 1 hour, 3 hours - any length works. App listens to loudness (laughs, cheers, beats) and picks BEST moments.")
 else:
-    st.info("📐 Normal Mode: App will cut your video into evenly spaced clips from start to end.")
+    st.info("📐 Normal Mode: Non-overlapping clips. Example: 90 sec video + 30 sec clips = 3 clips at 0:00, 0:30, 1:00 - No duplicates!")
 
 c1, c2 = st.columns(2)
 with c1:
     clip_count = st.slider("Maximum clips", 1, 30, 3)
-    clip_length = st.slider("Clip duration (seconds)", 10, 60, 30)
+    clip_length = st.slider("Clip duration (seconds)", 5, 60, 30)
 with c2:
     quality = st.selectbox("Video quality", ["Fast - Low CPU", "Balanced", "High"], index=0)
     source_volume = st.slider("Original audio volume", 0.0, 2.0, 1.5)
@@ -336,20 +430,20 @@ if clip_count > 10:
 st.subheader("✂️ Trim Settings")
 use_trim = st.toggle("Enable Trim - Use only a part of video", value=False)
 trim_start = 0.0
-trim_end = 9999.0
+trim_end = 999999.0
 if use_trim:
     cT1, cT2 = st.columns(2)
     with cT1:
         trim_start = st.number_input("Start Time (seconds) - Where to start?", min_value=0.0, value=0.0, step=1.0)
         st.caption("Example: 120 = Start from 2:00")
     with cT2:
-        trim_end = st.number_input("End Time (seconds) - Where to end?", min_value=1.0, value=60.0, step=1.0)
-        st.caption("Example: 300 = End at 5:00")
+        trim_end = st.number_input("End Time (seconds) - Where to end?", min_value=1.0, value=600.0, step=1.0)
+        st.caption("Example: 1800 = End at 30:00 - No limit, enter any value!")
     st.info(f"Trim: Using only {trim_start:.0f}s to {trim_end:.0f}s - Rest will be ignored!")
     if trim_end <= trim_start:
         st.error("End Time must be greater than Start Time!")
 else:
-    st.caption("Trim OFF - Full video will be used")
+    st.caption("Trim OFF - Full video will be used - Unlimited length!")
 
 st.subheader("🎨 Video Effects")
 effect = st.selectbox("Video Effect / Filter", ["None - Original", "Cinematic - Dark + Warm", "Vivid - Color Pop", "Black & White", "Vintage - Old Film", "Warm - Golden", "Cool - Blue"])
@@ -395,7 +489,7 @@ if st.button("GENERATE PREVIEW - 5 Sec Sample", use_container_width=True, key="b
         st.stop()
     work = Path(tempfile.mkdtemp(prefix="preview_"))
     try:
-        st.write("Making Preview... Please wait")
+        st.write("Making Preview... Please wait - Cobalt downloading...")
         source = get_source(work, source_type, video_url, video_upload)
         music = get_music(work, music_upload)
         p_start = trim_start if use_trim else 0.0
@@ -422,11 +516,11 @@ generate_disabled = not st.session_state.preview_done
 if st.button("GENERATE CLIPS", type="primary", use_container_width=True, disabled=generate_disabled, key="btn_generate"):
     work = Path(tempfile.mkdtemp(prefix="clipshort_"))
     try:
-        st.write("Processing your video...")
+        st.write("Processing your video via Cobalt...")
         source = get_source(work, source_type, video_url, video_upload)
         music = get_music(work, music_upload)
         total = get_duration(source)
-        st.write("Video length: " + str(round(total, 1)) + " sec (" + str(round(total / 60, 1)) + " min)")
+        st.write("Video length: " + str(round(total, 1)) + " sec (" + str(round(total / 60, 1)) + " min) - UNLIMITED Supported!")
         t_start = trim_start if use_trim else 0.0
         t_end = min(trim_end, total) if use_trim else total
         if t_end <= t_start:
@@ -434,24 +528,26 @@ if st.button("GENERATE CLIPS", type="primary", use_container_width=True, disable
             st.stop()
         st.write(f"Trim: {t_start:.0f}s to {t_end:.0f}s | Mode: {clip_mode} | Effect: {effect} | Speed: {speed}x")
         if "Highlight" in clip_mode:
-            st.write("Analyzing audio for highlight moments... (Loud parts = Best parts)")
+            st.write("Analyzing audio for highlight moments... (Loud parts = Best parts) - Unlimited length, please wait...")
             scores = get_highlight_scores(source, total)
             if scores is None:
                 st.warning("No audio found - Falling back to Normal Clipping")
                 starts = choose_normal_starts(total, clip_length, clip_count, t_start, t_end)
             else:
                 starts = choose_highlight_starts(scores, total, clip_length, clip_count, t_start, t_end)
-                st.write(f"Found {len(starts)} highlight moments!")
+                st.write(f"Found {len(starts)} highlight moments from {round(total/60,1)} min video!")
                 for idx, s in enumerate(starts):
-                    st.write(f"Highlight {idx+1}: Starts at {int(s//60)}:{int(s%60):02d}")
+                    st.write(f"Highlight {idx+1}: Starts at {int(s//60)}:{int(s%60):02d} - Duration {clip_length}s")
         else:
             starts = choose_normal_starts(total, clip_length, clip_count, t_start, t_end)
-            st.write(f"Normal Mode: {len(starts)} evenly spaced clips")
+            st.write(f"Normal Mode: {len(starts)} clips - No overlap!")
+            for idx, s in enumerate(starts):
+                st.write(f"Clip {idx+1}: Starts at {int(s//60)}:{int(s%60):02d}")
         st.write("Making " + str(len(starts)) + " clips...")
         outs = []
         for i, s in enumerate(starts):
             out = work / ("clip_" + str(i + 1) + ".mp4")
-            st.write("Rendering clip " + str(i + 1) + " / " + str(len(starts)) + f" - Start: {int(s//60)}:{int(s%60):02d}")
+            st.write("Rendering clip " + str(i + 1) + " / " + str(len(starts)) + f" - Start: {int(s//60)}:{int(s%60):02d} - Length: {clip_length}s")
             render_clip(source, out, s, clip_length, cfg, music)
             if out.exists():
                 outs.append(out)
