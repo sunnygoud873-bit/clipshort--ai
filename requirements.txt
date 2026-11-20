@@ -1,6 +1,5 @@
-streamlit==1.45.1
-faster-whisper==1.2.1
-av==18.1.0
+streamlit
 yt-dlp
 gdown
+faster-whisper
 
