@@ -1,5 +1,0 @@
-streamlit
-imageio-ffmpeg
-requests
-gdown
-yt-dlp
