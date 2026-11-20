@@ -9,8 +9,6 @@ st.set_page_config(page_title="CLIPSHORT AI", page_icon="🎬", layout="wide", i
 st.markdown("""
 <style>
 .block-container{max-width:1280px;padding-top:1rem;padding-bottom:2rem;padding-left:1rem;padding-right:1rem}
-h1{font-size:clamp(24px,5vw,38px)!important;line-height:1.2}
-h2,h3{font-size:clamp(16px,4vw,22px)!important}
 .stButton>button{width:100%;border-radius:10px;min-height:44px;font-size:15px}
 .stDownloadButton>button{width:100%;border-radius:10px;min-height:44px}
 video{width:100%!important;border-radius:12px}
@@ -21,22 +19,36 @@ video{width:100%!important;border-radius:12px}
 }
 </style>
 """, unsafe_allow_html=True)
-st.markdown("<h1>🎬 CLIPSHORT AI</h1><p>Highlight + Normal | YouTube + Cobalt + Drive + Upload</p>", unsafe_allow_html=True)
+st.markdown("<h1>🎬 CLIPSHORT AI</h1><p>Clipper + YouTube Downloader + Instagram Downloader</p>", unsafe_allow_html=True)
+
+# FIX 1: active_tab init MUST match radio value
 if "preview_done" not in st.session_state: st.session_state.preview_done=False
 if "preview_bytes" not in st.session_state: st.session_state.preview_bytes=None
+if "active_tab" not in st.session_state: st.session_state.active_tab="🎬 CLIPPER"
 
-# ---------- UTILS ----------
 def run_cmd(a):
     r=subprocess.run(a,capture_output=True,text=True)
     if r.returncode!=0: raise RuntimeError((r.stderr or r.stdout)[-1200:])
     return r.stdout.strip()
 def check_ffmpeg(): return shutil.which("ffmpeg") is not None
-def get_duration(p): return float(run_cmd(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(p)]))
+def get_duration(p):
+    try: return float(run_cmd(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(p)]))
+    except: return 0.0
 def has_audio(p):
     r=subprocess.run(["ffprobe","-v","error","-select_streams","a:0","-show_entries","stream=codec_type","-of","csv=p=0",str(p)],capture_output=True,text=True)
     return bool(r.stdout.strip())
 
-# ---------- DOWNLOAD: DRIVE ----------
+# FIX 2: Correct mime for all file types
+def get_mime(p):
+    s=str(p).lower()
+    if s.endswith(".mp3"): return "audio/mp3"
+    if s.endswith(".webm"): return "video/webm"
+    if s.endswith(".mkv"): return "video/x-matroska"
+    if s.endswith(".jpg") or s.endswith(".jpeg"): return "image/jpeg"
+    if s.endswith(".png"): return "image/png"
+    if s.endswith(".webp"): return "image/webp"
+    return "video/mp4"
+
 def get_drive_id(url):
     p=urlparse(url.strip()); m=re.search(r"/file/d/([A-Za-z0-9_-]+)",p.path)
     if m: return m.group(1)
@@ -52,7 +64,6 @@ def download_drive(url,folder):
     if not target.exists() or target.stat().st_size<10000: raise RuntimeError("Drive failed. Set Anyone with link -> Viewer")
     return target
 
-# ---------- DOWNLOAD: COBALT + YOUTUBE FIXED ----------
 COBALT_INSTANCES=["https://co.wuk.sh/","https://cobalt-backend.canine.tools/","https://cobalt-api.kavin.rocks/"]
 def _dl_url(vurl,folder,name):
     target=folder/name
@@ -62,17 +73,22 @@ def _dl_url(vurl,folder,name):
             for c in dl.iter_content(chunk_size=1024*1024*2):
                 if c: f.write(c)
     if target.exists() and target.stat().st_size>10000: return target
-    raise RuntimeError("Empty file")
-def download_via_cobalt(url,folder):
+    raise RuntimeError("Empty file from server")
+def download_via_cobalt(url,folder,filename="cobalt_video.mp4"):
+    last_err=""
     for base in COBALT_INSTANCES:
         try:
             r=requests.post(base,json={"url":url.strip(),"videoQuality":"720","filenameStyle":"basic"},headers={"Accept":"application/json","Content-Type":"application/json"},timeout=30)
-            if r.status_code!=200: continue
-            vurl=r.json().get("url")
-            if not vurl: continue
-            return _dl_url(vurl,folder,"cobalt_video.mp4")
-        except: continue
-    raise RuntimeError("Cobalt failed. Try YouTube / Drive / Upload.")
+            if r.status_code!=200:
+                last_err=f"{base} status {r.status_code}"; continue
+            j=r.json(); vurl=j.get("url")
+            if not vurl:
+                last_err=f"{base} no url"; continue
+            return _dl_url(vurl,folder,filename)
+        except Exception as e:
+            last_err=str(e); continue
+    # FIX 3: Show real Cobalt error
+    raise RuntimeError(f"Cobalt failed: {last_err} - Try again after 2 mins")
 def get_video_id(url):
     u=url.strip()
     if "youtu.be/" in u: return u.split("youtu.be/")[-1].split("?")[0].split("&")[0]
@@ -86,15 +102,9 @@ def get_video_id(url):
 def download_youtube(url,folder):
     u=url.strip(); vid=get_video_id(u)
     if not vid: raise RuntimeError("Invalid YouTube link. Use watch?v= / youtu.be / shorts")
-    for base in COBALT_INSTANCES:
-        try:
-            r=requests.post(base,json={"url":u,"videoQuality":"720","filenameStyle":"basic"},headers={"Accept":"application/json","Content-Type":"application/json"},timeout=30)
-            if r.status_code!=200: continue
-            vurl=r.json().get("url")
-            if not vurl: continue
-            return _dl_url(vurl,folder,"youtube_video.mp4")
-        except: continue
-    for host in ["https://pipedapi.kavin.rocks","https://pipedapi-libre.kavin.rocks","https://pipedapi.adminforge.de","https://pipedapi.leptons.xyz","https://pipedapi.cfe.dev","https://pipedapi.dmatik.dev"]:
+    try: return download_via_cobalt(u,folder,"youtube_video.mp4")
+    except Exception as e: print("YT Cobalt fail:",e)
+    for host in ["https://pipedapi.kavin.rocks","https://pipedapi-libre.kavin.rocks","https://pipedapi.adminforge.de","https://pipedapi.leptons.xyz"]:
         try:
             r=requests.get(f"{host}/streams/{vid}",timeout=15)
             if r.status_code!=200: continue
@@ -104,15 +114,6 @@ def download_youtube(url,folder):
             cand=sorted(cand,key=lambda x: int(str(x.get("quality","720")).replace("p","") or 720))
             return _dl_url(cand[0]["url"],folder,"youtube_video.mp4")
         except: continue
-    for host in ["https://vid.puffyan.us","https://invidious.privacyredirect.com","https://iv.datura.network"]:
-        try:
-            r=requests.get(f"{host}/api/v1/videos/{vid}",timeout=15)
-            if r.status_code!=200: continue
-            stms=r.json().get("formatStreams",[])
-            if not stms: continue
-            stms=sorted(stms,key=lambda x: 0 if x.get("itag")==18 else 1)
-            return _dl_url(stms[0]["url"],folder,"youtube_video.mp4")
-        except: continue
     try:
         import yt_dlp
         opts={"format":"18/best[ext=mp4]/best","outtmpl":str(folder/"youtube_video.%(ext)s"),"noplaylist":True,"quiet":True,"no_warnings":True,"retries":3,"socket_timeout":30,"extractor_args":{"youtube":{"player_client":["mweb","ios","tv"]}}}
@@ -121,8 +122,20 @@ def download_youtube(url,folder):
         if files and files[0].stat().st_size>10000: return files[0]
     except Exception as e: print("yt-dlp fail",e)
     raise RuntimeError("YouTube failed on all servers. Try again after 2 mins or use Drive/Upload.")
+def download_instagram(url,folder):
+    u=url.strip()
+    if "instagram.com" not in u and "instagr.am" not in u: raise RuntimeError("Invalid Instagram link. Use instagram.com/reel/ or /p/ link")
+    try: return download_via_cobalt(u,folder,"insta_video.mp4")
+    except Exception as e: print("Insta cobalt fail",e)
+    try:
+        import yt_dlp
+        opts={"format":"best[ext=mp4]/best","outtmpl":str(folder/"insta_video.%(ext)s"),"noplaylist":True,"quiet":True,"no_warnings":True,"retries":3,"socket_timeout":30}
+        with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([u])
+        files=[f for f in folder.glob("insta_video.*") if f.suffix.lower() in [".mp4",".webm",".mkv",".jpg",".png"]]
+        if files and files[0].stat().st_size>10000: return files[0]
+    except Exception as e: print("Insta yt-dlp fail",e)
+    raise RuntimeError("Instagram failed. Reel must be PUBLIC. Private videos will not download.")
 
-# ---------- HIGHLIGHTS ----------
 def get_highlight_scores(video_path,total):
     try:
         import numpy as np
@@ -132,6 +145,7 @@ def get_highlight_scores(video_path,total):
         with wave.open(str(ap),"rb") as wf:
             n=wf.getnframes(); rate=wf.getframerate(); data=wf.readframes(n)
         audio=np.frombuffer(data,dtype=np.int16).astype(float)/32768.0
+        if len(audio)==0: return None
         scores=[]
         for i in range(int(total)):
             s=i*rate; e=min((i+1)*rate,len(audio))
@@ -144,7 +158,7 @@ def get_highlight_scores(video_path,total):
         try: ap.unlink()
         except: pass
         return sm
-    except Exception as e: print("Highlight fail",e); return None
+    except Exception as e: print(e); return None
 def choose_highlight_starts(scores,total,length,count,ts,te):
     if scores is None: return None
     cands=[]; start=ts; step=2.0
@@ -166,7 +180,6 @@ def choose_normal_starts(total,length,count,ts,te):
     step=(avail-length)/(count-1)
     return [ts+i*step for i in range(count)]
 
-# ---------- RENDER ----------
 RATIOS={"9:16 - Shorts / Reels":(1080,1920),"16:9 - YouTube":(1920,1080),"1:1 - Post":(1080,1080),"4:5 - Portrait":(1080,1350)}
 RESOLUTIONS={"480p - Fast":480,"720p - HD":720,"1080p - Full HD":1080}
 def get_output_size(rl,resl):
@@ -205,6 +218,7 @@ def get_source(work,stype,url,up):
     if stype=="Google Drive": return download_drive(url,work)
     if stype=="YouTube": return download_youtube(url,work)
     if stype=="TikTok / Insta / X / FB (Cobalt)": return download_via_cobalt(url,work)
+    if up is None: raise RuntimeError("Upload file missing")
     suf=Path(up.name).suffix.lower()
     if suf not in [".mp4",".mov",".mkv",".webm",".avi",".m4v"]: suf=".mp4"
     src=work/("uploaded_video"+suf)
@@ -218,92 +232,85 @@ def get_music(work,up):
     with m.open("wb") as f: shutil.copyfileobj(up,f,length=1024*1024)
     return m
 
-# ---------- LAYOUT: columns create chesi, RIGHT mundhu fill chey (bug fix) ----------
-left, right = st.columns([1.5, 1], gap="medium")
+main_mode = st.radio("Select Section", ["🎬 CLIPPER", "⬇️ DOWNLOADER"], horizontal=True, key="main_mode_radio_v3")
+if main_mode != st.session_state.active_tab:
+    st.session_state.preview_done=False
+    st.session_state.preview_bytes=None
+    st.session_state.active_tab=main_mode
 
-# RIGHT FIRST - Settings mundhu define avvali, lekapothe left lo NameError
-with right:
-    st.subheader("⚙️ Editing Settings")
-    st.markdown("**🎯 Clipping Mode**")
-    clip_mode=st.radio("How to clip?",["🔥 Highlight Moments - Best Parts Only (UNLIMITED)","📐 Normal Clipping - Evenly Spaced Clips"],index=1)
-    if "Highlight" in clip_mode: st.info("🔥 Highlight: Loud = Best. Any length.")
-    else: st.info("📐 Normal: Evenly, no overlap.")
-    clip_count=st.slider("Maximum clips",1,30,3); clip_length=st.slider("Clip duration (seconds)",5,60,30)
-    quality=st.selectbox("Quality",["Fast - Low CPU","Balanced","High"],index=0)
-    source_volume=st.slider("Original audio volume",0.0,2.0,1.5); music_volume=st.slider("Music volume",0.0,2.0,0.25)
-    if clip_count>10: st.warning(f"{clip_count} clips = more time.")
-    st.markdown("**✂️ Trim**")
-    use_trim=st.toggle("Enable Trim",value=False); trim_start=0.0; trim_end=9999.0
-    if use_trim:
-        trim_start=st.number_input("Start (sec)",min_value=0.0,value=0.0,step=1.0)
-        trim_end=st.number_input("End (sec)",min_value=1.0,value=60.0,step=1.0)
-        if trim_end<=trim_start: st.error("End must be > Start")
-    else: st.caption("Trim OFF - Full video used")
-    st.markdown("**🎨 Effects**")
-    effect=st.selectbox("Effect",["None - Original","Cinematic - Dark + Warm","Vivid - Color Pop","Black & White","Vintage - Old Film","Warm - Golden","Cool - Blue"])
-    brightness=st.slider("Brightness",-0.3,0.3,0.0,step=0.01); speed=st.selectbox("Speed",[0.5,0.75,1.0,1.25,1.5,2.0],index=2)
-    contrast=st.slider("Contrast",0.5,2.0,1.0,step=0.05); sharpen=st.slider("Sharpen",0.0,3.0,0.0,step=0.5)
-    saturation=st.slider("Saturation",0.0,2.5,1.0,step=0.05); blur=st.slider("Blur",0.0,3.0,0.0,step=0.5)
-    fade_in=st.toggle("Fade In",value=False); fade_out=st.toggle("Fade Out",value=False)
-    st.markdown("**📐 Ratio & Resolution**")
-    ratio_label=st.selectbox("Aspect Ratio",list(RATIOS.keys()),index=0)
-    res_label=st.selectbox("Resolution",list(RESOLUTIONS.keys()),index=0)
-    out_w,out_h=get_output_size(ratio_label,res_label); st.info(f"{ratio_label} | {res_label} | {out_w}x{out_h}")
-    cfg={"source_volume":source_volume,"music_volume":music_volume,"out_w":out_w,"out_h":out_h,"effect":effect,"brightness":brightness,"contrast":contrast,"saturation":saturation,"sharpen":sharpen,"blur":blur,"speed":float(speed),"fade_in":fade_in,"fade_out":fade_out}
-
-# LEFT SECOND - Ippudu cfg, trim_start anni ready
-with left:
-    st.subheader("📁 Video Source")
-    source_type=st.radio("Choose source",["YouTube","TikTok / Insta / X / FB (Cobalt)","Google Drive","Upload video"],horizontal=True,index=0)
-    video_url=""; video_upload=None
-    if source_type=="Google Drive": video_url=st.text_input("Drive link",placeholder="Paste Drive link"); st.caption("Drive: Anyone with link -> Viewer")
-    elif source_type=="Upload video": video_upload=st.file_uploader("Upload video",type=["mp4","mov","mkv","webm","avi","m4v"])
-    elif source_type=="TikTok / Insta / X / FB (Cobalt)": video_url=st.text_input("Link",placeholder="https://www.instagram.com/reel/... / tiktok..."); st.caption("Cobalt - For TikTok/Insta/X/FB only")
-    else: video_url=st.text_input("YouTube URL",placeholder="https://www.youtube.com/watch?v=..."); st.caption("YouTube: Cobalt + Piped + Invidious + yt-dlp - Auto try")
-    st.subheader("🎵 Background Music (Optional)")
-    music_upload=st.file_uploader("Upload music",type=["mp3","wav","m4a","aac","ogg","flac"])
-    st.subheader("👀 Step 1: Preview")
-    if st.button("GENERATE PREVIEW - 5 Sec",use_container_width=True):
-        if source_type=="Upload video" and video_upload is None: st.error("Upload video first"); st.stop()
-        if source_type!="Upload video" and not video_url.strip().startswith(("https://","http://")): st.error("Enter valid link"); st.stop()
-        if not check_ffmpeg(): st.error("FFmpeg missing"); st.stop()
-        work=Path(tempfile.mkdtemp(prefix="preview_"))
-        try:
-            st.write("Making Preview...")
-            src=get_source(work,source_type,video_url,video_upload); mus=get_music(work,music_upload)
-            p_start=trim_start if use_trim else 0.0; p_out=work/"preview.mp4"; render_clip(src,p_out,p_start,5,cfg,mus)
-            with open(p_out,"rb") as f: st.session_state.preview_bytes=f.read()
-            st.success("Preview Ready!"); st.video(st.session_state.preview_bytes); st.session_state.preview_done=True
-        except Exception as e: st.error("Preview Error: "+str(e)); st.session_state.preview_done=False
-    if st.session_state.preview_bytes is not None: st.video(st.session_state.preview_bytes)
-    if st.session_state.preview_done: st.success("Preview Approved - Generate Now!")
-    else: st.warning("Generate Locked - Watch Preview First")
-    st.subheader("🚀 Step 2: Generate Clips")
-    if st.button("GENERATE CLIPS",type="primary",use_container_width=True,disabled=not st.session_state.preview_done):
-        work=Path(tempfile.mkdtemp(prefix="clipshort_"))
-        try:
-            st.write("Processing...")
-            src=get_source(work,source_type,video_url,video_upload); mus=get_music(work,music_upload); total=get_duration(src)
-            st.write(f"Video: {round(total,1)} sec ({round(total/60,1)} min) - No limit")
-            t_start=trim_start if use_trim else 0.0; t_end=min(trim_end,total) if use_trim else total
-            if t_end<=t_start: st.error("Trim End must be > Start"); st.stop()
-            if "Highlight" in clip_mode:
-                st.write("Analyzing audio for highlights... (any length)")
-                scores=get_highlight_scores(src,total)
-                if scores is None: st.warning("No audio - Using Normal"); starts=choose_normal_starts(total,clip_length,clip_count,t_start,t_end)
+if main_mode == "🎬 CLIPPER":
+    st.subheader("🎬 Clipper - Highlight + Normal")
+    left, right = st.columns([1.5, 1], gap="medium")
+    with right:
+        st.subheader("⚙️ Editing Settings")
+        clip_mode=st.radio("How to clip?",["🔥 Highlight Moments - Best Parts Only (UNLIMITED)","📐 Normal Clipping - Evenly Spaced Clips"],index=1, key="clip_mode_v3")
+        clip_count=st.slider("Maximum clips",1,30,3, key="clip_count_v3"); clip_length=st.slider("Clip duration (seconds)",5,60,30, key="clip_len_v3")
+        source_volume=st.slider("Original audio volume",0.0,2.0,1.5, key="clip_sv_v3"); music_volume=st.slider("Music volume",0.0,2.0,0.25, key="clip_mv_v3")
+        use_trim=st.toggle("Enable Trim",value=False, key="clip_trim_v3"); trim_start=0.0; trim_end=None
+        if use_trim:
+            trim_start=st.number_input("Start (sec)",min_value=0.0,value=0.0,step=1.0, key="clip_ts_v3")
+            trim_end=st.number_input("End (sec)",min_value=1.0,value=60.0,step=1.0, key="clip_te_v3")
+            if trim_end<=trim_start: st.error("End must be > Start")
+        effect=st.selectbox("Effect",["None - Original","Cinematic - Dark + Warm","Vivid - Color Pop","Black & White","Vintage - Old Film","Warm - Golden","Cool - Blue"], key="clip_eff_v3")
+        brightness=st.slider("Brightness",-0.3,0.3,0.0,step=0.01, key="clip_br_v3"); speed=st.selectbox("Speed",[0.5,0.75,1.0,1.25,1.5,2.0],index=2, key="clip_sp_v3")
+        contrast=st.slider("Contrast",0.5,2.0,1.0,step=0.05, key="clip_ct_v3"); sharpen=st.slider("Sharpen",0.0,3.0,0.0,step=0.5, key="clip_sh_v3")
+        saturation=st.slider("Saturation",0.0,2.5,1.0,step=0.05, key="clip_sat_v3"); blur=st.slider("Blur",0.0,3.0,0.0,step=0.5, key="clip_bl_v3")
+        fade_in=st.toggle("Fade In",value=False, key="clip_fi_v3"); fade_out=st.toggle("Fade Out",value=False, key="clip_fo_v3")
+        ratio_label=st.selectbox("Aspect Ratio",list(RATIOS.keys()),index=0, key="clip_ratio_v3")
+        res_label=st.selectbox("Resolution",list(RESOLUTIONS.keys()),index=0, key="clip_res_v3")
+        out_w,out_h=get_output_size(ratio_label,res_label); st.info(f"{ratio_label} | {res_label} | {out_w}x{out_h}")
+        cfg={"source_volume":source_volume,"music_volume":music_volume,"out_w":out_w,"out_h":out_h,"effect":effect,"brightness":brightness,"contrast":contrast,"saturation":saturation,"sharpen":sharpen,"blur":blur,"speed":float(speed),"fade_in":fade_in,"fade_out":fade_out}
+    with left:
+        source_type=st.radio("Choose source",["YouTube","TikTok / Insta / X / FB (Cobalt)","Google Drive","Upload video"],horizontal=True,index=0, key="clip_src_v3")
+        video_url=""; video_upload=None
+        if source_type=="Google Drive": video_url=st.text_input("Drive link",placeholder="Paste Drive link", key="clip_drive_v3")
+        elif source_type=="Upload video": video_upload=st.file_uploader("Upload video",type=["mp4","mov","mkv","webm","avi","m4v"], key="clip_up_v3")
+        elif source_type=="TikTok / Insta / X / FB (Cobalt)": video_url=st.text_input("Link",placeholder="https://www.instagram.com/reel/...", key="clip_cobalt_v3")
+        else: video_url=st.text_input("YouTube URL",placeholder="https://www.youtube.com/watch?v=...", key="clip_yt_v3")
+        music_upload=st.file_uploader("🎵 Background Music (Optional)",type=["mp3","wav","m4a","aac","ogg","flac"], key="clip_music_v3")
+        st.subheader("👀 Step 1: Preview")
+        if st.button("GENERATE PREVIEW - 5 Sec",use_container_width=True, key="clip_prev_v3"):
+            if source_type=="Upload video" and video_upload is None: st.error("Please upload video first"); st.stop()
+            if source_type!="Upload video" and not video_url.strip().startswith(("https://","http://")): st.error("Enter valid link"); st.stop()
+            if not check_ffmpeg(): st.error("FFmpeg missing"); st.stop()
+            work=Path(tempfile.mkdtemp(prefix="preview_"))
+            try:
+                st.write("Making Preview...")
+                src=get_source(work,source_type,video_url,video_upload); mus=get_music(work,music_upload)
+                p_start=trim_start if use_trim else 0.0; p_out=work/"preview.mp4"; render_clip(src,p_out,p_start,5,cfg,mus)
+                with open(p_out,"rb") as f: st.session_state.preview_bytes=f.read()
+                st.success("Preview Ready!"); st.video(st.session_state.preview_bytes); st.session_state.preview_done=True
+            except Exception as e: st.error("Preview Error: "+str(e)); st.session_state.preview_done=False
+        if st.session_state.preview_bytes is not None: st.video(st.session_state.preview_bytes)
+        if st.session_state.preview_done: st.success("Preview Approved - Generate Now!")
+        else: st.warning("Generate Locked - Watch Preview First")
+        st.subheader("🚀 Step 2: Generate Clips")
+        if st.button("GENERATE CLIPS",type="primary",use_container_width=True,disabled=not st.session_state.preview_done, key="clip_gen_v3"):
+            work=Path(tempfile.mkdtemp(prefix="clipshort_"))
+            try:
+                st.write("Processing...")
+                src=get_source(work,source_type,video_url,video_upload); mus=get_music(work,music_upload); total=get_duration(src)
+                if total<=0: st.error("Could not read video duration"); st.stop()
+                st.write(f"Video: {round(total,1)} sec - No limit")
+                t_start=trim_start if use_trim else 0.0; t_end=min(trim_end,total) if use_trim and trim_end else total
+                if t_end<=t_start: st.error("Trim End must be > Start"); st.stop()
+                if "Highlight" in clip_mode:
+                    scores=get_highlight_scores(src,total)
+                    if scores is None:
+                        st.warning("No audio found - Using Normal clipping")
+                        starts=choose_normal_starts(total,clip_length,clip_count,t_start,t_end)
+                    else:
+                        starts=choose_highlight_starts(scores,total,clip_length,clip_count,t_start,t_end)
+                        for idx,s in enumerate(starts): st.write(f"Highlight {idx+1}: {int(s//60)}:{int(s%60):02d}")
                 else:
-                    starts=choose_highlight_starts(scores,total,clip_length,clip_count,t_start,t_end)
-                    st.write(f"Found {len(starts)} highlights!")
-                    for idx,s in enumerate(starts): st.write(f"Highlight {idx+1}: {int(s//60)}:{int(s%60):02d}")
-            else:
-                starts=choose_normal_starts(total,clip_length,clip_count,t_start,t_end); st.write(f"Normal: {len(starts)} clips")
-            outs=[]
-            for i,s in enumerate(starts):
-                out=work/f"clip_{i+1}.mp4"; st.write(f"Rendering {i+1}/{len(starts)} - {int(s//60)}:{int(s%60):02d}"); render_clip(src,out,s,clip_length,cfg,mus)
-                if out.exists(): outs.append(out)
-            st.success(f"Done - {len(outs)} Clips Ready!")
-            for i,o in enumerate(outs):
-                st.subheader(f"Clip {i+1} - {out_w}x{out_h}")
-                st.video(str(o))
-                with open(o,"rb") as f: st.download_button(f"⬇️ Download Clip {i+1}",f,file_name=f"clip_{i+1}.mp4",mime="video/mp4",key=f"dl_{i}")
-        except Exception as e: st.error("Error: "+str(e))
+                    starts=choose_normal_starts(total,clip_length,clip_count,t_start,t_end)
+                outs=[]
+                for i,s in enumerate(starts):
+                    out=work/f"clip_{i+1}.mp4"; st.write(f"Rendering {i+1}/{len(starts)} - {int(s//60)}:{int(s%60):02d}"); render_clip(src,out,s,clip_length,cfg,mus)
+                    if out.exists() and out.stat().st_size>10000: outs.append(out)
+                if not outs: st.error("No clips rendered. Try different video."); st.stop()
+                st.success(f"Done - {len(outs)} Clips Ready!")
+                for i,o in enumerate(outs):
+                    st.subheader(f"Clip {i+1} - {out_w}x{out_h}"); st.video(str(o))
+                    with open(o,"rb") as f: st.download_button(f"⬇️ Download Clip {i+1}",f,file_name=f"clip_{i+1}.mp4",mime="video/mp4",key=f"clip_dl_v3_{i}")
+except 
