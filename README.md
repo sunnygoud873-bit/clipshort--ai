@@ -1,18 +1,25 @@
-# CLIPSHORT AI
+# 🎬 CLIPSHORT AI
 
-AI-powered short video generator.
+AI-powered short video generator. Paste a link, preview, and generate viral clips.
 
 ## Features
+
+- YouTube downloader - Cobalt + Piped + Invidious + yt-dlp (Auto Fallback)
+- TikTok / Instagram / X / Facebook downloader - Cobalt
 - Google Drive video downloader
-- YouTube link downloader
 - Local video upload
 - 1 to 30 clips
-- Automatic Whisper subtitles
-- Font and caption customization
+- Highlight Moments - Best Parts Only (Unlimited Length)
+- Normal Clipping - Evenly Spaced Clips
+- Trim - Start / End
 - Background music
+- Effects - Cinematic, Vivid, Black & White, Vintage, Warm, Cool
+- Brightness / Contrast / Saturation / Sharpen / Blur / Speed / Fade
+- Aspect Ratio - 9:16, 16:9, 1:1, 4:5
+- Resolution - 480p / 720p / 1080p
 - Audio volume settings
 - Vertical 1080x1920 MP4 export
-- ZIP download
+- Mobile + Desktop Compatible - Editing Settings on Right Side
 
 ## Deployment
 
@@ -24,12 +31,8 @@ AI-powered short video generator.
 
 ## Google Drive
 
-Set sharing to Anyone with the link - Viewer.
+Set sharing to Anyone with the link -> Viewer
 
-Large files are downloaded directly to server disk.
+## YouTube
 
-IMPORTANT: A 4 GB source download may work, but processing it is not guaranteed on Streamlit free hosting. Free CPU, memory and disk limits apply.
-
-YouTube downloads can be blocked by YouTube.
-
-Clip selection is based on speech activity, not visual action recognition.
+Select Source = YouTube and paste watch?v= / youtu.be / shorts link.
