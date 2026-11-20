@@ -1,10 +1,9 @@
 import streamlit as st
-import subprocess, tempfile, shutil, re
+import subprocess, tempfile, shutil, re, time
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 st.set_page_config(page_title="CLIPSHORT AI", page_icon="🎬", layout="wide", initial_sidebar_state="collapsed")
-
 st.markdown("""
 <style>
 .stApp { background: #0b1120 !important; }
@@ -18,6 +17,7 @@ div.stButton > button, div.stDownloadButton > button { background: linear-gradie
 [data-testid="stSelectbox"] div[data-baseweb="select"] > div { background: white !important; color: black !important; }
 [data-testid="stSelectbox"] div[data-baseweb="select"] span { color: black !important; }
 div[data-baseweb="popover"] * { color: black !important; background: white !important; }
+.turbo-box { padding: 16px; border-radius: 14px; background: #022c22; border: 1px solid #10b981; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -27,7 +27,7 @@ def run_cmd(args):
     r = subprocess.run(args, capture_output=True, text=True)
     if r.returncode != 0: raise RuntimeError((r.stderr or r.stdout)[-3000:])
     return r.stdout.strip()
-def check_ffmpeg(): return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
+def check_ffmpeg(): return shutil.which("ffmpeg") is not None
 def get_duration(path):
     v = run_cmd(["ffprobe","-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",str(path)])
     return float(v)
@@ -41,45 +41,77 @@ def get_drive_id(url):
     q = parse_qs(p.query)
     if q.get("id"): return q["id"][0]
     raise ValueError("Invalid Drive link.")
-def download_drive(url, folder):
-    import gdown
+
+def download_drive(url, folder, prog, txt):
+    import requests
     fid = get_drive_id(url)
-    target = folder / "drive_video"
-    res = gdown.download(id=fid, output=str(target), quiet=False)
-    if not res: raise RuntimeError("Drive failed. Set Anyone with link -> Viewer.")
-    path = Path(res)
-    if not path.exists() or path.stat().st_size==0: raise RuntimeError("Drive file empty.")
-    return path
+    target = folder / "drive_video.mp4"
+    dl_url = f"https://drive.google.com/uc?export=download&id={fid}&confirm=t"
+    s = requests.Session()
+    r = s.get(dl_url, stream=True, timeout=60)
+    try:
+        for c in r.cookies:
+            if c.name.startswith("download_warning"):
+                r = s.get(f"https://drive.google.com/uc?export=download&id={fid}&confirm={c.value}", stream=True, timeout=60)
+                break
+    except: pass
+    total_size = int(r.headers.get('content-length', 0))
+    downloaded = 0
+    start = time.time()
+    with open(target, "wb") as f:
+        for chunk in r.iter_content(chunk_size=1024*1024*2):
+            if chunk:
+                f.write(chunk); downloaded += len(chunk)
+                elapsed = time.time() - start
+                if elapsed > 0:
+                    speed = downloaded/1024/1024/elapsed
+                    if total_size > 0:
+                        pct = downloaded/total_size
+                        prog.progress(min(pct,1.0))
+                        txt.text(f"⚡ Downloading... {downloaded/1024/1024:.1f} MB / {total_size/1024/1024:.1f} MB | Speed: {speed:.1f} MB/s | {pct*100:.0f}%")
+                    else:
+                        txt.text(f"⚡ Downloading... {downloaded/1024/1024:.1f} MB | Speed: {speed:.1f} MB/s")
+    prog.progress(1.0)
+    txt.text(f"✅ Download Done! {downloaded/1024/1024:.1f} MB")
+    if not target.exists() or target.stat().st_size < 10000:
+        raise RuntimeError("Drive failed. Set Anyone with link -> Viewer.")
+    return target
+
 def download_youtube(url, folder):
     import yt_dlp
-    opts = {"format":"best[height<=720][ext=mp4]/best[height<=720]/best","outtmpl":str(folder/"youtube_video.%(ext)s"),"noplaylist":True,"quiet":True,"retries":2}
+    opts = {"format":"best[height<=720][ext=mp4]/best[height<=720]/best","outtmpl":str(folder/"youtube_video.%(ext)s"),"noplaylist":True,"quiet":True}
     with yt_dlp.YoutubeDL(opts) as d: d.download([url])
     files = list(folder.glob("youtube_video.*"))
-    if not files: raise RuntimeError("YouTube blocked on cloud. Upload video instead.")
+    if not files: raise RuntimeError("YouTube blocked. Upload video instead.")
     return files[0]
-
-@st.cache_resource
-def load_whisper():
-    # FIXED: Use stable whisper, not faster-whisper (no metadata_errors bug)
-    import whisper
-    return whisper.load_model("tiny")
 
 LANGUAGE_CODES = {"Hindi":"hi","Telugu":"te","Tamil":"ta","Kannada":"kn","Malayalam":"ml","Bengali":"bn","Marathi":"mr","Gujarati":"gu","Punjabi":"pa","Urdu":"ur"}
 
+@st.cache_resource
+def load_whisper():
+    from faster_whisper import WhisperModel
+    return WhisperModel("tiny", device="cpu", compute_type="int8")
+
 def transcribe_video(path, language):
-    model = load_whisper()
-    if language == "English (Translate)":
-        res = model.transcribe(str(path), task="translate", fp16=False)
-    elif language == "Auto Detect":
-        res = model.transcribe(str(path), fp16=False)
-    else:
-        res = model.transcribe(str(path), language=LANGUAGE_CODES[language], fp16=False)
-    out=[]
-    for s in res.get("segments", []):
-        txt = s.get("text","").strip()
-        if not txt: continue
-        out.append({"start":float(s["start"]),"end":float(s["end"]),"text":txt})
-    return out
+    try:
+        audio_path = Path(str(path) + "_audio.wav")
+        subprocess.run(["ffmpeg","-y","-i",str(path),"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",str(audio_path)], capture_output=True)
+        if not audio_path.exists() or audio_path.stat().st_size < 1000:
+            return []
+        model = load_whisper()
+        opts = {"vad_filter": True, "beam_size": 1, "temperature": 0.0}
+        if language == "English (Translate)": opts["task"]="translate"
+        elif language in LANGUAGE_CODES: opts["language"]=LANGUAGE_CODES[language]
+        segments,_ = model.transcribe(str(audio_path), **opts)
+        out=[]
+        for s in segments:
+            txt = s.text.strip()
+            if txt and getattr(s,"no_speech_prob",0) < 0.85:
+                out.append({"start":float(s.start),"end":float(s.end),"text":txt})
+        return out
+    except Exception as e:
+        print(f"Subtitle skipped: {e}")
+        return []
 
 def choose_starts(segments,total,length,count):
     if total<=length: return [0.0]
@@ -143,7 +175,6 @@ def render_clip(source,output,start,length,segments,cfg,music):
     run_cmd(args)
     if sub_file.exists(): sub_file.unlink()
 
-# ===== NO SIDEBAR - ALL SETTINGS IN MAIN PAGE =====
 st.subheader("📁 Video Source")
 source_type=st.radio("Choose source",["Google Drive","Upload video","YouTube"],horizontal=True)
 video_url=""; video_upload=None
@@ -158,13 +189,20 @@ else:
 st.subheader("🎵 Background Music")
 music_upload=st.file_uploader("Upload music (optional)",type=["mp3","wav","m4a","aac","ogg","flac"])
 
+st.subheader("⚡ Internet Speed Booster")
+turbo = st.toggle("🚀 TURBO MODE - Fast Download + Fast Render", value=True)
+if turbo:
+    st.markdown('<div class="turbo-box">✅ <b>TURBO ON</b> - Download: MAX Speed | Render: ULTRAFAST | AI: Tiny Fast Model</div>', unsafe_allow_html=True)
+else:
+    st.info("🐢 TURBO OFF - Normal Mode")
+
 with st.expander("⚙️ EDIT SETTINGS - Click To Open", expanded=True):
     c1,c2,c3 = st.columns(3)
     with c1:
-        clip_count=st.slider("Maximum clips",1,30,5)
+        clip_count=st.slider("Maximum clips",1,30,3)
         clip_length=st.slider("Clip duration (seconds)",10,90,30)
         subtitles=st.toggle("Automatic subtitles",value=True)
-        language=st.selectbox("Subtitle language",["English (Translate)","Auto Detect","Hindi","Telugu","Tamil","Kannada","Malayalam","Bengali","Marathi","Gujarati","Punjabi","Urdu"],index=0)
+        language=st.selectbox("Subtitle language",["English (Translate)","Auto Detect","Hindi","Telugu","Tamil","Kannada","Malayalam","Bengali","Marathi","Gujarati","Punjabi","Urdu"],index=3)
     with c2:
         font=st.selectbox("Font family",["Noto Sans","Arial","DejaVu Sans","Liberation Sans","Montserrat","Roboto","Poppins","Impact","Georgia"])
         font_size=st.slider("Font size",18,80,48)
@@ -183,6 +221,8 @@ with st.expander("⚙️ EDIT SETTINGS - Click To Open", expanded=True):
     with c6: quality=st.selectbox("Video quality",["Fast","Balanced","High"],index=1)
 
 cfg={"subtitles":subtitles,"font":font,"font_size":font_size,"text_color":text_color,"outline_color":outline_color,"outline":outline,"position":position,"bold":bold,"uppercase":uppercase,"background":background,"background_color":background_color,"shadow":shadow,"source_volume":source_volume,"music_volume":music_volume,"preset":{"Fast":"ultrafast","Balanced":"veryfast","High":"fast"}[quality],"crf":{"Fast":27,"Balanced":23,"High":19}[quality]}
+if turbo:
+    cfg["preset"]="ultrafast"; cfg["crf"]=28
 
 st.subheader("🚀 Generate Your Clips")
 if st.button("GENERATE CLIPS",type="primary",use_container_width=True):
@@ -191,13 +231,13 @@ if st.button("GENERATE CLIPS",type="primary",use_container_width=True):
     if source_type!="Upload video" and not video_url.strip().startswith(("https://","http://")):
         st.error("Please enter a valid video link."); st.stop()
     if not check_ffmpeg():
-        st.error("FFmpeg missing. Check packages.txt."); st.stop()
+        st.error("FFmpeg missing."); st.stop()
     work=Path(tempfile.mkdtemp(prefix="clipshort_"))
     try:
         with st.status("Processing your video...",expanded=True) as status:
             if source_type=="Google Drive":
-                st.write("Downloading Drive...")
-                source=download_drive(video_url,work)
+                prog = st.progress(0); txt = st.empty(); txt.text("⚡ Connecting to Google Drive at MAX Speed...")
+                source=download_drive(video_url,work,prog,txt)
             elif source_type=="YouTube":
                 st.write("Downloading YouTube...")
                 source=download_youtube(video_url,work)
@@ -214,9 +254,16 @@ if st.button("GENERATE CLIPS",type="primary",use_container_width=True):
             if cfg["subtitles"]:
                 st.write(f"Transcribing in {language}... Please wait 1-2 min")
                 segments=transcribe_video(source,language)
-                st.write(f"Found {len(segments)} subtitle lines.")
+                if not segments:
+                    st.warning("No speech found / Subtitles skipped - Making clips without subtitles")
+                    cfg["subtitles"]=False
+                else: st.write(f"Found {len(segments)} subtitle lines.")
             else: segments=[]
-            starts=choose_starts(segments,total,clip_length,clip_count) if segments else [i*clip_length for i in range(min(clip_count,int(total//clip_length)))]
+            if segments:
+                starts=choose_starts(segments,total,clip_length,clip_count)
+            else:
+                starts=[i*clip_length for i in range(max(1, min(clip_count, int(total//clip_length))))]
+                if not starts: starts=[0.0]
             st.write(f"Making {len(starts)} clips...")
             outs=[]
             for i,s in enumerate(starts):
