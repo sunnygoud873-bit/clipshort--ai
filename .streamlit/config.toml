@@ -1,7 +1,6 @@
 [server]
-maxUploadSize = 4096
-maxMessageSize = 4096
-enableXsrfProtection = true
-
+maxUploadSize = 10000
+maxMessageSize = 10000
+enableXsrfProtection = false
 [theme]
 base = "dark"
