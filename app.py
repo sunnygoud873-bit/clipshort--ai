@@ -49,21 +49,62 @@ def clean_insta_url(url):
     m=re.search(r"/(reel|reels|p)/([A-Za-z0-9_-]+)",u)
     if m: return "https://www.instagram.com/reel/"+m.group(2)+"/"
     return u+"/" if not u.endswith("/") else u
+
+# ========== PERFECT DRIVE FIX - NO ERROR ==========
 def get_drive_id(url):
-    parsed=urlparse(url.strip())
-    m=re.search(r"/file/d/([A-Za-z0-9_-]+)",parsed.path)
+    url = url.strip()
+    # Format 1: https://drive.google.com/file/d/FILE_ID/view
+    m = re.search(r"/file/d/([A-Za-z0-9_-]+)", url)
     if m: return m.group(1)
-    q=parse_qs(parsed.query)
+    # Format 2: https://drive.google.com/open?id=FILE_ID
+    parsed = urlparse(url)
+    q = parse_qs(parsed.query)
     if q.get("id"): return q["id"][0]
-    raise ValueError("Invalid Drive link")
-def download_drive(url,folder):
-    fid=get_drive_id(url); target=folder/"drive_video.mp4"; s=requests.Session()
-    r=s.get("https://drive.google.com/uc?export=download&id="+fid+"&confirm=t",stream=True,timeout=120)
-    with open(target,"wb") as f:
+    # Format 3: Direct ID pasted
+    if len(url) > 20 and "/" not in url and " " not in url:
+        return url
+    raise ValueError("Invalid Drive link. Paste full Drive link like: https://drive.google.com/file/d/FILE_ID/view")
+
+def download_drive(url, folder):
+    fid = get_drive_id(url)
+    target = folder / "drive_video.mp4"
+
+    # NEW Google Drive direct download - Works for small + large files
+    # Old drive.google.com/uc is blocked by Google now
+    # New drive.usercontent.google.com + confirm=t skips virus scan page
+    download_url = f"https://drive.usercontent.google.com/download?id={fid}&export=download&confirm=t"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    }
+
+    s = requests.Session()
+    r = s.get(download_url, headers=headers, stream=True, timeout=180, allow_redirects=True)
+
+    # Check Content-Type - If Google returns HTML, file is not public
+    content_type = r.headers.get("Content-Type", "")
+    if "text/html" in content_type:
+        raise RuntimeError("Drive failed. Set Anyone with link to Viewer - File is still Private.")
+
+    # Download in chunks
+    with open(target, "wb") as f:
         for c in r.iter_content(chunk_size=1024*1024*2):
             if c: f.write(c)
-    if not target.exists() or target.stat().st_size<10000: raise RuntimeError("Drive failed. Set Anyone with link to Viewer")
+
+    # Validate file exists and is not empty
+    if not target.exists() or target.stat().st_size < 10000:
+        raise RuntimeError("Drive failed. File is empty. Check Drive link and set Anyone with link to Viewer.")
+
+    # Validate file is actually video, not HTML page
+    with open(target, "rb") as f:
+        header = f.read(500).decode("utf-8", errors="ignore")
+    if "<html" in header or "<!DOCTYPE" in header:
+        target.unlink(missing_ok=True)
+        raise RuntimeError("Drive returned a web page, not video. Set file to Anyone with link > Viewer.")
+
     return target
+# ========== END DRIVE FIX ==========
+
 COBALT_INSTANCES=["https://co.wuk.sh/","https://cobalt-backend.canine.tools/","https://cobalt-api.kavin.rocks/"]
 def download_from_url(vurl,folder,name):
     target=folder/name
@@ -224,7 +265,6 @@ if main_mode!=st.session_state.active_tab:
 
 if main_mode=="CLIPPER":
     st.subheader("Clipper - Highlight + Normal")
-    # NO COLUMNS - Full width vertical
     source_type=st.radio("Choose source",["Google Drive","Upload video"],horizontal=True,index=0,key="clip_src_final")
     video_url=""; video_upload=None
     if source_type=="Google Drive": video_url=st.text_input("Drive link",placeholder="Paste Drive link",key="clip_drive_final")
@@ -309,49 +349,43 @@ if main_mode=="CLIPPER":
                 st.success(f"Done - {len(new_clips)} Clips Ready!")
         except Exception as e: st.error("Error: "+str(e))
 
-    # ===== ONE PAGE - 1 TO 10 ANNI OKKA PAGE LO - NO PAGINATION =====
     if st.session_state.generated_clips:
         st.divider()
         total_clips=len(st.session_state.generated_clips)
-        st.header(f"✅ {total_clips} Clips Ready! - 1 to {total_clips} anni okka page lo")
-        # Download All ZIP
-        zip_buf=io.BytesIO()
-        with zipfile.ZipFile(zip_buf,"w",zipfile.ZIP_STORED) as z:
-            for c in st.session_state.generated_clips: z.writestr(c["name"],c["data"])
-        st.download_button(f"📦 DOWNLOAD ALL {total_clips} CLIPS (ZIP) - Okesari",zip_buf.getvalue(),file_name="all_clips.zip",mime="application/zip",key="dl_all_onepage",type="primary")
-        st.write("Kindaki scroll chey - Clip 1 nunchi Clip 10 varaku anni ikkade unnayi 👇")
-        # 1 TO 10 - Anni okka page lo, okkadaniki kinda okati
-        for i,c in enumerate(st.session_state.generated_clips):
-            st.subheader(f"Clip {i+1} - {out_w}x{out_h} - {len(c['data'])//1024//1024} MB")
-            # Expander lo video - click chesthe ne load avthundi, page fast untundi kani list motham kanipisthundi
-            with st.expander(f"▶️ Play Clip {i+1}", expanded=(i==0)):
-                st.video(c["data"])
-            st.download_button(f"⬇️ Download Clip {i+1}",c["data"],file_name=c["name"],mime="video/mp4",key=f"dl_onepage_{i}")
-            st.divider()
+        st.header(f"✅ {total_clips} Clips Ready - All in One Page")
+        for idx, clip in enumerate(st.session_state.generated_clips):
+            st.subheader(f"Clip {idx+1}")
+            st.video(clip["data"])
+            st.download_button(f"⬇️ Download Clip {idx+1}", data=clip["data"], file_name=clip["name"], mime="video/mp4", key=f"dl_clip_{idx}")
+        # ZIP Download All
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for clip in st.session_state.generated_clips:
+                z.writestr(clip["name"], clip["data"])
+        zip_buf.seek(0)
+        st.download_button("⬇️ DOWNLOAD ALL CLIPS (ZIP)", data=zip_buf, file_name="clipshort_clips.zip", mime="application/zip", key="dl_all_zip_final")
 
-if main_mode=="DOWNLOADER":
-    st.subheader("Downloader - Instagram Only")
-    insta_url=st.text_input("Instagram Link",placeholder="https://instagram.com/reel/...",key="dl_insta_url_final")
-    insta_format=st.selectbox("Format - Instagram",["Video - MP4","Audio - MP3"],key="dl_insta_format_final")
-    insta_quality=st.selectbox("Quality",["720p - HD","480p - Fast","1080p - Full HD"],key="dl_insta_q_final")
-    if st.button("DOWNLOAD INSTAGRAM",type="primary",use_container_width=True,key="dl_insta_btn_final"):
-        if not insta_url.strip().startswith(("https://","http://")): st.error("Please paste a valid Instagram link")
-        else:
-            work=Path(tempfile.mkdtemp(prefix="insta_dl_")); want_mp3="MP3" in insta_format
-            try:
-                with st.spinner("Downloading... Please wait"):
-                    src=download_instagram(insta_url,work,want_mp3=want_mp3)
-                    if want_mp3:
-                        st.success("Instagram MP3 Done!"); st.audio(str(src))
-                        with open(src,"rb") as f: data=f.read()
-                        st.download_button("SAVE MP3 TO PHONE - Instagram",data,file_name=src.name,mime="audio/mp3",key="dl_insta_save_mp3_final")
-                    elif src.suffix.lower() in [".jpg",".png",".webp"]:
-                        st.image(str(src))
-                        with open(src,"rb") as f: data=f.read()
-                        st.download_button("SAVE IMAGE",data,file_name=src.name,mime=get_mime(src),key="dl_insta_img_final")
+elif main_mode=="DOWNLOADER":
+    st.subheader("Downloader - Instagram + MP3")
+    dl_url = st.text_input("Instagram Link", placeholder="https://www.instagram.com/reel/...", key="dl_url_final")
+    dl_mp3 = st.toggle("Convert to MP3 Only", value=False, key="dl_mp3_final")
+    if st.button("DOWNLOAD", type="primary", use_container_width=True, key="dl_btn_final"):
+        if not dl_url.strip():
+            st.error("Paste Instagram link first"); st.stop()
+        work = Path(tempfile.mkdtemp(prefix="dl_"))
+        try:
+            with st.spinner("Downloading..."):
+                result = download_instagram(dl_url, work, want_mp3=dl_mp3)
+                with open(result, "rb") as f: data = f.read()
+                st.success("Download Ready!")
+                if dl_mp3:
+                    st.audio(data, format="audio/mp3")
+                    st.download_button("⬇️ Download MP3", data=data, file_name=result.name, mime="audio/mp3", key="dl_mp3_btn_final")
+                else:
+                    if result.suffix.lower() in [".jpg",".jpeg",".png",".webp"]:
+                        st.image(data)
                     else:
-                        st.success("Instagram Video Done!"); st.video(str(src))
-                        with open(src,"rb") as f: data=f.read()
-                        st.download_button("SAVE VIDEO TO PHONE - Instagram",data,file_name=src.name,mime=get_mime(src),key="dl_insta_save_final")
-            except Exception as e: st.error("Download Failed: "+str(e))
-    st.info("Tip: Insta Clean link: https://www.instagram.com/reel/Dfqu4ikT61P/")
+                        st.video(data)
+                    st.download_button(f"⬇️ Download {result.name}", data=data, file_name=result.name, mime=get_mime(result), key="dl_vid_btn_final")
+        except Exception as e:
+            st.error("Error: " + str(e))
